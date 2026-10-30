@@ -1,0 +1,56 @@
+# This repository is the integration recipe, not the payload.
+# The image, the model weights and the vehicle data all ship out of band.
+# See "What is not in this repository" in README.md for why each one is excluded.
+
+# --- The built image and anything docker save produces -------------------
+# The tarball is 12 GB. GitHub rejects any file over 100 MB on push.
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+
+# --- The staged build context --------------------------------------------
+# build.sh assembles this from the live source trees at build time.
+# It is ~1.3 GB and every byte of it is reproducible, so it is never committed.
+ctx/
+
+# --- Vendored third-party source -----------------------------------------
+# perception_suite and offroad_autonomy belong to their authors.
+# build.sh copies them into the context from their own checkouts.
+# Committing a copy here would fork them silently.
+felix/
+bryan/
+bench/
+
+# --- Model weights and TensorRT engines ----------------------------------
+# 395 MB, and the .engine files are serialized against one exact TensorRT
+# build, so they are worthless on a board with a different JetPack.
+*.pt
+*.onnx
+*.engine
+
+# --- Vehicle data: do not commit -----------------------------------------
+# The clips are footage recorded from the HATCI vehicle.
+# The CAN CSVs carry lat/lon columns, so they are a GPS trace of it.
+# Publishing either is HATCI's call to make, not ours.
+*.mp4
+*.mkv
+*.avi
+*.csv
+*.mcap
+*.bag
+*.db3
+
+# --- Build and run artifacts ---------------------------------------------
+*.log
+.build-done
+.selftest*-done
+.save-done
+__pycache__/
+*.py[cod]
+build/
+install/
+log/
+
+# --- macOS ---------------------------------------------------------------
+.DS_Store

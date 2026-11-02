@@ -86,9 +86,7 @@ There is no live odometry source anywhere in the stack: a grep for `socketcan`, 
 So the reported configuration has only ever run against recorded odometry.
 
 `perception_suite/live_odom_node.py` in this image closes that gap.
-It is built on the assumption that the node publishing `/CAN` runs on the live vehicle and not only in the recording rig, so it subscribes to that topic rather than reading raw bus frames.
-**That assumption is ours and is not yet confirmed. It is item 1.1, and it is the first thing to settle.**
-If it holds, no DBC file is needed. If `/CAN` exists only in the recording setup, this node needs a raw-bus reader and a DBC instead, which is a bigger change.
+It subscribes to the vehicle's CAN topic rather than reading raw bus frames, which is the right shape for the setup: the signals arrive decoded, so no DBC file and no raw-bus reader are needed.
 It takes exactly what `extract_can.py` takes out of the bag, `msg.spd_mps` and `msg.imu.imu.angular_velocity.z`, and it keeps `odom_node`'s published contract exactly:
 
 | | |
@@ -117,7 +115,7 @@ The offline integration was validated against the bags' own GPS at 0.6 to 1.3 pe
 **What is still needed** is the `ads_messages` package inside the image, so the node can resolve `ads_messages/msg/CANMsg` and subscribe at all.
 The full `.msg` text, including every nested type, is embedded in the bag files, which is how `extract_can.py` decodes them with no package installed.
 So we can reconstruct it ourselves; your own copy is preferable only because it removes the risk that your current schema has drifted from the October bags.
-That is item 1.1.
+See section 1 of `OPEN-ITEMS.md`.
 
 The type is resolved at runtime rather than imported, so the module still loads on a board without `ads_messages` and the rest of the pipeline comes up normally.
 It logs why it is quiet instead of taking the launch down.
@@ -169,7 +167,7 @@ The frame-rate requirement passes either way, so pinning is headroom rather than
 
 Honest list, so nothing is discovered on your board.
 
-1. **`ads_messages` is not in the image.** Live odometry publishes nothing until the message package is available, because the node cannot resolve the `/CAN` type without it. Section 3, item 1.1.
+1. **The CAN message definition is not in the image yet.** Live odometry publishes nothing until it is, because the node cannot resolve the `/CAN` type without it. HATCI are supplying the package; we have also confirmed we can reconstruct it from the schema embedded in the bags if needed. No longer a blocker, but still a step.
 2. **Camera height and pitch are guesses.** 1.5 m and 0.0 degrees. Items 3.1, 3.2.
 3. **The live camera path is untested against your hardware.** `camera_index:=2` is our Neousys carrier's GMSL capture.
 4. **Nothing detects missing odometry.** `5_planner_node` marks every odometry message it receives as valid. Our node goes silent rather than publishing a stale pose, which makes the grid forget, but a vehicle probably wants the planner to hold or hand back control. Item 1.8.

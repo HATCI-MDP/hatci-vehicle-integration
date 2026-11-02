@@ -1,0 +1,189 @@
+"""Starts the whole pipeline: one source node, then stages 2-6.
+
+    ros2 launch perception_suite pipeline.launch.py
+    ros2 launch perception_suite pipeline.launch.py source:=video video_path:=other.mp4
+    ros2 launch perception_suite pipeline.launch.py source:=camera
+    ros2 launch perception_suite pipeline.launch.py source:=camera camera_index:=0
+    ros2 launch perception_suite pipeline.launch.py scene:=snow
+    ros2 launch perception_suite pipeline.launch.py visualize:=false
+    ros2 launch perception_suite pipeline.launch.py backend:=tensorrt
+    ros2 launch perception_suite pipeline.launch.py model:=semantic backend:=tensorrt
+    ros2 launch perception_suite pipeline.launch.py config:=demo_route.yaml video_path:=demo_route.mp4
+
+config:= is the input (a YAML file name in src/perception_suite/config),
+model:= the segmentation model, backend:= how it runs and scene:= its prompts;
+see perception_suite/settings.py. Run it from the workspace root, where the
+relative video and weight paths point.
+"""
+
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, OpaqueFunction, TimerAction
+from launch.conditions import IfCondition
+from launch.substitutions import LaunchConfiguration, PythonExpression
+from launch_ros.actions import Node
+from perception_suite import settings
+
+# Source name -> (executable, launch arguments it takes as parameters).
+# A new input (camera, beamng) is one entry here plus its node.
+SOURCES = {
+    'video': ('1_video_node', ['video_path', 'loop', 'video_fps', 'width']),
+    'camera': ('1_camera_node', ['camera_index', 'camera_fps', 'width',
+                                 'pixel_format', 'rotate_180',
+                                 'warmup_frames']),
+}
+
+
+def _validated(context):
+    """Everything that can reject an argument, run before any stage starts."""
+    path = settings.resolve(LaunchConfiguration('config').perform(context))
+    settings.model(path, LaunchConfiguration('model').perform(context))
+    settings.scene_prompts(path, LaunchConfiguration('scene').perform(context))
+    parameters = {'config': LaunchConfiguration('config'),
+                  'model': LaunchConfiguration('model'),
+                  'scene': LaunchConfiguration('scene'),
+                  'backend': LaunchConfiguration('backend')}
+    segmentation = Node(
+        package='perception_suite', executable='3_segmentation_node', output='screen',
+        parameters=[parameters])
+    return [segmentation] + _source(context)
+
+
+def _source(context):
+    name = LaunchConfiguration('source').perform(context)
+    if name not in SOURCES:
+        raise ValueError(f"source must be one of {sorted(SOURCES)}, got '{name}'")
+    executable, arguments = SOURCES[name]
+    parameters = {arg: LaunchConfiguration(arg).perform(context) for arg in arguments}
+    # perform() always yields a string, and the two source nodes disagree on the
+    # type they declare: 1_video_node uses an integer default, 1_camera_node a
+    # string one. rclpy rejects a mismatch with InvalidParameterTypeException,
+    # so coerce to whatever this source expects rather than to one type for both.
+    parameters['width'] = (str(parameters['width']) if name == 'camera'
+                           else int(parameters['width']))
+    node = Node(package='perception_suite', executable=executable, name='source_node',
+                parameters=[parameters], output='screen')
+    # Frames sent while the segmenter is still loading its model are dropped,
+    # so the source waits for the stages to come up.
+    delay = float(LaunchConfiguration('source_delay').perform(context))
+    return [TimerAction(period=delay, actions=[node])]
+
+
+def generate_launch_description():
+    config = {'config': LaunchConfiguration('config'), 'model': LaunchConfiguration('model')}
+
+    def stage(executable, extra=None, **kwargs):
+        parameters = [config]
+        if extra:
+            parameters.append(extra)
+        return Node(package='perception_suite', executable=executable,
+                    parameters=parameters, output='screen', **kwargs)
+
+    return LaunchDescription([
+        DeclareLaunchArgument('source', default_value='video',
+                              description=f'Input node: {", ".join(sorted(SOURCES))}'),
+        DeclareLaunchArgument('source_delay', default_value='10.0',
+                              description='Seconds to wait before starting the source'),
+        DeclareLaunchArgument('camera_index', default_value='0',
+                              description='V4L2 index for source:=camera. The GMSL '
+                                          'dashcam enumerates at /dev/video0 on our '
+                                          'carrier; the other three channels exist '
+                                          'but have nothing attached'),
+        DeclareLaunchArgument('camera_fps', default_value='30.0',
+                              description='capture rate for source:=camera'),
+        DeclareLaunchArgument('pixel_format', default_value='NV16',
+                              description='Sensor pixel format for source:=camera. '
+                                          'NV16 is the only one that decodes '
+                                          'correctly on this hardware: the device '
+                                          'advertises UYVY first, and OpenCV\'s own '
+                                          'V4L2 backend mis-decodes every format it '
+                                          'offers. Do not change without looking at '
+                                          'the output'),
+        DeclareLaunchArgument('rotate_180', default_value='false',
+                              description='Rotate camera frames 180 degrees. Off by '
+                                          'default: a silent rotation would put the '
+                                          'road at the top of the frame and make the '
+                                          'ground projection confidently wrong rather '
+                                          'than obviously broken. Our bench camera '
+                                          'presents inverted and needs true'),
+        DeclareLaunchArgument('warmup_frames', default_value='5',
+                              description='Frames discarded after the stream starts. '
+                                          'The first carries torn rows, about 4 per '
+                                          'cent of pixels; it is clean by frame 5'),
+        DeclareLaunchArgument('width', default_value='1280',
+                              description='Width the source publishes. Nothing between\n'
+                                          'the source and 2_preprocess_node reads the\n'
+                                          'larger frame, so setting this to the working\n'
+                                          'width removes a resample and 4x the bytes'),
+        DeclareLaunchArgument('video_path', default_value='test_video.mp4',
+                              description='Video file for source:=video'),
+        DeclareLaunchArgument('loop', default_value='true',
+                              description='Restart the video at the end instead of '
+                                          'stopping, for source:=video; false plays it once'),
+        DeclareLaunchArgument('video_fps', default_value='30.0',
+                              description='Publish rate for source:=video; raise it '
+                                          'to measure the pipeline ceiling'),
+        DeclareLaunchArgument('config', default_value=settings.DEFAULT_CONFIG,
+                              description='Pipeline config for the input: a YAML file '
+                                          'name in src/perception_suite/config'),
+        DeclareLaunchArgument('model', default_value=settings.DEFAULT_MODEL,
+                              description='Segmentation model from perception.models in '
+                                          'the config: yoloe or semantic'),
+        DeclareLaunchArgument('scene', default_value=settings.DEFAULT_SCENE,
+                              description='YOLOE prompt set from perception.scenes in the '
+                                          'config (e.g. trail, snow, sandy); ignored by '
+                                          'the semantic model'),
+        DeclareLaunchArgument('backend', default_value='pytorch',
+                              choices=['pytorch', 'tensorrt'],
+                              description='Segmentation inference: pytorch, or tensorrt '
+                                          '(NVIDIA GPU; builds an engine on first use)'),
+        DeclareLaunchArgument('planner_mode', default_value='',
+                              description='Override the planner: baseline, advanced '
+                                          'or grid. Empty lets the config decide, '
+                                          'except that a can_csv selects grid - so '
+                                          'this is how to run the baseline planner '
+                                          'WITH odometry, which is a real case: that '
+                                          'planner ignores ego motion, so the '
+                                          'odometry then feeds only the speed '
+                                          'readout and the controller'),
+        DeclareLaunchArgument('can_topic', default_value='',
+                              description='ROS topic carrying live vehicle CAN, '
+                                          'e.g. /CAN. Empty disables the node. '
+                                          'Mutually exclusive with can_csv: the '
+                                          'csv is the recorded bags, this is the '
+                                          'vehicle. Needs the CAN message package '
+                                          'built into the image so the type can be '
+                                          'resolved; see OPEN-ITEMS.md section 1'),
+        DeclareLaunchArgument('can_csv', default_value='',
+                              description='Extracted CAN csv to replay as odometry. '
+                                          'Empty disables the node, and the planner '
+                                          'then falls back to its static speed_mps'),
+        DeclareLaunchArgument('speed_mps', default_value='0.0',
+                              description='Fixed vehicle speed given to the planner'),
+        DeclareLaunchArgument('visualize', default_value='true',
+                              description='Open the visualizer window'),
+        # First, so a bad config, model, scene or source fails before any
+        # stage node starts.
+        OpaqueFunction(function=_validated),
+        stage('2_preprocess_node'),
+        Node(package='perception_suite', executable='odom_node', output='screen',
+             parameters=[{'can_csv': LaunchConfiguration('can_csv'),
+                          'loop': LaunchConfiguration('loop')}],
+             condition=IfCondition(
+                 PythonExpression(["'", LaunchConfiguration('can_csv'), "' != ''"]))),
+        Node(package='perception_suite', executable='live_odom_node', output='screen',
+             parameters=[{'can_topic': LaunchConfiguration('can_topic')}],
+             condition=IfCondition(
+                 PythonExpression(["'", LaunchConfiguration('can_topic'), "' != ''"]))),
+        stage('4_postprocess_node'),
+        stage('5_planner_node', {
+            'speed_mps': LaunchConfiguration('speed_mps'),
+            # A CAN csv is only useful to the grid planner, so supplying one
+            # selects it; the baseline planner ignores ego motion entirely.
+            # An explicit planner_mode wins; otherwise a CAN csv selects grid.
+            'planner_mode': PythonExpression(
+                ["'", LaunchConfiguration('planner_mode'),
+                 "' or ('grid' if '", LaunchConfiguration('can_csv'),
+                 "' or '", LaunchConfiguration('can_topic'),
+                 "' else '')"])}),
+        stage('6_visualizer_node', condition=IfCondition(LaunchConfiguration('visualize'))),
+    ])

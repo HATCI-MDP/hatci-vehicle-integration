@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+deprecated/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Environment
+.env
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+.claude/
+
+# Model weights and exported engines
+*.pt
+*.ts
+*.engine
+*.onnx
+models/
+
+# Datasets (too large for git)
+datasets/
+
+# Generated outputs
+output/
+runs/
+benchmark/
+
+# Media files (test data, results)
+test_videos/
+*.mp4
+*.avi
+*.png
+*.jpg
+*.jpeg

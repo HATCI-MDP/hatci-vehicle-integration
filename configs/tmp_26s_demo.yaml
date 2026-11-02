@@ -1,0 +1,195 @@
+# Pipeline config for the HATCI vehicle camera, as recorded in the
+# Oct 2026 bags: 2880x1860, fisheye, hood 33-37% of frame height.
+# Derived from demo_route.yaml; see scripts/mk_hatci_cfg.py for what
+# differs and why.
+
+beamng:
+  camera:
+    # VIDEO: camera height and pitch are guesses. Only the planner's
+    # image-to-ground mapping reads them.
+    height_m: 1.5
+    pitch_deg: 0.0
+    # VIDEO: the frame as video_node publishes it (1280 wide, 16:9).
+    # fov_h is a guess until the camera is known; the planner's metres and
+    # its ROI both depend on it.
+    sensor:
+      # The HATCI vehicle camera, from the bag recordings.
+      width: 2880
+      height: 1860
+      # Fisheye, rational_polynomial. CameraModel is a pinhole, so the
+      # ground projection is approximate until the image is undistorted.
+      # From the bag's own CameraInfo: fx = 1714.2 over 2880 px. The lens is a
+      # 120 degree fisheye, but these frames are already rectified (all
+      # distortion coefficients zero), and rectification crops the field of
+      # view, so the lens spec is not what the frames show.
+      fov_h: 80.1
+    # The car's hood across the bottom of demo_route.mp4, traced from the
+    # edges that stay put across the whole video. Normalised (x, y).
+    ego_mask:
+      enabled: true
+      margin_px: 2
+      # Flat at 0.67, matching origin/main. The hood's silhouette sits at
+      # 0.63 at the edges and 0.67 at the centre, so 0.63 was the line that
+      # cleared all of it - but it also threw away rows 261-276, which carry
+      # the nearest road the camera can see.
+      #
+      # Measured over 1800 frames of bag1 and bag3 with the 26n, 0.63 -> 0.67:
+      # gate stops 75 -> 46 on bag1 and 89 -> 63 on bag3, and the frame-300
+      # failure cluster disappears. Those rows anchor the centreline walk; it
+      # was dying three rows later to the lateral-slope guard without them.
+      #
+      # And the recovered band is road, not bodywork: per column it is called
+      # road 0.848 of the time in the centre against 0.156/0.161 at the edges,
+      # an outer/centre ratio of 0.19 - identical to the rows above it that
+      # are known-good road. Bonnet being read as terrain would light up the
+      # edges, since that is where the hood reaches highest. See
+      # scripts/hood_band.py.
+      polygon:
+        - [0.0, 0.67]
+        - [1.0, 0.67]
+        - [1.0, 1.0]
+        - [0.0, 1.0]
+perception:
+  # Segmentation models, picked with the launch argument model:=<name>. Each
+  # gives its weights (relative to the workspace root, where the launch runs)
+  # and its own planning.gate.confidence_threshold, which depends on what the
+  # model's confidence means. backend:=tensorrt builds and caches an engine
+  # from the weights on first use, so these stay .pt files.
+  # Named directly rather than through perception.models, because
+  # fused.launch.py has no model:= argument and load_pipeline_config
+  # would otherwise fall back to settings.DEFAULT_MODEL, which is
+  # "yoloe" - the weak open-vocabulary model, in PyTorch.
+  model_weights: "/bench/models/new/weights_26s.640.engine"
+  segmentation_threshold: 0.15
+  input_size: 640
+  # YOLOE prompt sets by scene, picked with the launch argument scene:=<name>
+  # (default trail). YOLOE scores how well the road matches the text, and the
+  # planner's gate drops frames below the model's gate_confidence_threshold,
+  # so prompts that do not describe the scene stall the planner even when the
+  # mask is right. The semantic model ignores them.
+  scenes:
+    # orfd-lane-detection's defaults, for BeamNG dirt trails.
+    trail:
+      - "traversable road"
+      - "dirt road"
+      - "off-road trail"
+      - "drivable terrain"
+      - "gravel path"
+    # On test_video.mp4 (26n): median best score 0.78, against 0.19 for trail,
+    # with a near-identical mask. "road" and "rural road" alone find nothing.
+    snow:
+      - "snow covered road"
+    # On demo_route.mp4 (26n): median best score 0.20, passing the gate on
+    # 52% of frames. Use sandy there.
+    gravel:
+      - "gravel road"
+      - "gravel path"
+      - "dirt road"
+    # Light sand and gravel roads, as in demo_route.mp4 (26n): median best
+    # score 0.41 and 89% of frames past the gate, against 0.27 and 75% for
+    # trail. YOLOE sees this surface as a path: "dirt road", "gravel road"
+    # and "unpaved road" alone each pass on under 10% of frames. Adding
+    # "drivable terrain" barely raises the score but spreads onto lawns.
+    sandy:
+      - "sandy gravel path"
+      - "sandy path"
+
+preprocessing:
+  # Half the published frame, so the aspect matches the sensor above.
+  target_width: 640
+  target_height: 413
+  # Off: measured -0.014 to -0.016 IoU on both labelled splits, by
+  # trading recall for precision - it finds less road, which is the
+  # wrong direction for a planner that needs a corridor.
+  enable_clahe: false
+  clahe_clip_limit: 2.0
+  clahe_grid_size: 8
+
+postprocessing:
+  enable_morphology: false
+  enable_ema: false
+  ema_alpha: 0.7
+  min_mask_area_fraction: 0.001
+  morphology_kernel_size: 5
+
+planning:
+  mode: baseline
+  grid:
+    # Defaults are 16 m of map and 14 m of arc. At the 7.5 m/s this route was
+    # driven that is under two seconds of path, and the controller spent 73%
+    # of its frames braking for the end of it rather than for anything in the
+    # road. Raised until the arcs stopped growing, which is how far the grid
+    # actually has evidence: path length went 12.75 -> 18.75 m, and the cost
+    # was 0.6 ms of latency with the frame rate unchanged at 30.0 and empty
+    # paths still at 0%. "path end" fell from 73% of frames to 1.2%.
+    ahead_m: 24.0
+    lookahead_m: 20.0
+  # VIDEO: with pitch 0 the horizon is mid-frame, so 0.45 stops just below it
+  # (about 27 m ahead at the guessed height and FOV).
+  roi_height: 0.45
+  baseline_temporal_blend: 0.4
+  baseline_max_shift_m: 0.5
+  gate:
+    # The semantic model has no per-detection score and reports 1.0 on
+    # every frame; min_mask_area, min_road_pixels and the anchor check
+    # gate it instead.
+    confidence_threshold: 0.0
+    min_mask_area: 0.05
+    hold_frames: 10
+    hold_speed_scale: 0.4
+  centerline_samples: 20
+  min_road_pixels: 1579   # 2000 at 720x465, scaled by area to 640x413: an absolute count, so it must track the working resolution or the gate silently tightens
+
+# Vehicle geometry, read from the bags' own /vehicle_config rather than left
+# at the library defaults, which describe the BeamNG test vehicle.
+#
+# Only the controller and the BEV arc generator use these. ArcPlanner builds
+# its fan as +-tan(max_wheel_angle)/wheelbase, so a wrong wheelbase makes
+# every arc the wrong curvature and any steering angle derived from one wrong
+# by the same ratio - 2.6 against 2.815 is 8%.
+control:
+  # /vehicle_config: wheelbase 2815 mm. Default is 2.6.
+  wheelbase_m: 2.815
+  # /vehicle_config: max_rwa 32 deg, which the default already matched.
+  max_wheel_angle_deg: 32.0
+
+  # How far the command is stale by the time it acts. The default 0.35 came
+  # from BeamNG at ~4 FPS; this stack publishes /path at 28.9-29.8 FPS with a
+  # measured p50 of 55-69 ms end to end (results/phase9). Actuation on the
+  # real vehicle is unmeasured, so this covers the perception chain only and
+  # wants revisiting the first time it drives something.
+  control_latency_s: 0.10
+
+  # Speeds and lateral limits taken from how the vehicle was actually driven
+  # on this route, which is the only ground truth available without putting
+  # the controller in front of one. From the CAN in data/can, over whole bags:
+  #
+  #            speed m/s            lateral accel m/s2 (|v * yaw_rate|)
+  #        median  p85   max       median  p95   max
+  #  bag1    7.5   8.0   9.1        0.11  1.00  2.18
+  #  bag3    7.7   8.5   9.8        0.20  0.95  1.96
+  #  bag2   10.1  11.3  12.5        0.20  1.64  2.77
+  #
+  # The defaults are 12 mph cruise and a 15 mph ceiling, so the controller
+  # braked on 86% of frames with "limit" as its reason on 47% of them - it was
+  # holding a speed the driver never observed. 17 mph is bag1/bag3's median;
+  # 22 mph clears their maxima. bag2 is the high-speed bag and will sit on the
+  # limit, which is the honest answer for a route nobody has approved a speed
+  # for.
+  target_speed_mph: 17.0
+  speed_limit_mph: 22.0
+  # Defaults 0.5 and 0.8, against a measured p95 of 1.0 on both demo bags.
+  # 2.0 sits above every bag's p95 and just under bag1's hardest moment, so
+  # the controller will not brake for a corner the driver took flat.
+  max_lateral_accel_mps2: 2.0
+  max_measured_lateral_accel_mps2: 2.0
+  # Default 8.0, which at 7.5 m/s is reached before the vehicle has travelled
+  # a second. The grid plans 14 m ahead and path_end_m measures 13.85, so 12
+  # keeps the lookahead inside the path with margin to spare.
+  lookahead_max_m: 12.0
+
+mpc:
+  # /vehicle_config: x_cam2axle 1070 mm. Default is 1.4. CenterlinePlanner
+  # passes this to ArcPlanner as rear_axle_behind_camera_m, so it sets where
+  # every arc begins relative to the camera.
+  camera_ahead_of_rear_axle_m: 1.07

@@ -1,14 +1,16 @@
 # HATCI off-road perception stack: handoff
 
-**This folder is documentation. The code and data are in the image.**
-These files describe how to run the stack, what is inside it, and what we still need from you.
-The pipeline source, the ROS workspace, the model weights and the demo clips are all baked into `hatci-vehicle-draft1.tar.gz`, which ships separately because it is 12 GB compressed.
-Once loaded, the source is readable and editable inside the image at `/opt/ws/src`.
+**The pipeline source is in `src/`. The weights, clips and built workspace are in the image.**
+The two packages under `src/` are the readable source: `perception_suite`, the six ROS 2 nodes, and `offroad_autonomy`, the algorithm library they import.
+See `src/README.md` for how they fit together and how to build them.
+The model weights, the demo clips and the prebuilt workspace are baked into `hatci-vehicle-draft1.tar.gz`, which ships separately because it is 12 GB compressed.
 
 **Read `OPEN-ITEMS.md` first.** It is what we need confirmed, ordered by what it blocks.
 
 | File | What it is |
 |---|---|
+| `src/` | The pipeline source, both packages. Start at `src/README.md`. |
+| `configs/` | The run configuration behind every number we have reported. |
 | `OPEN-ITEMS.md` | Everything we need confirmed or supplied, with why each one matters. |
 | `HANDOFF.md` | Technical README for the image: how to run it, what is inside, what is still missing. |
 | `run_vehicle.sh` | Host-side runner. Run `./run_vehicle.sh selftest` first on any new board. |
@@ -16,6 +18,8 @@ Once loaded, the source is readable and editable inside the image at `/opt/ws/sr
 | `docker/entrypoint.sh` | In-image dispatcher: `bag1 \| bag2 \| bag3 \| camera \| selftest \| shell`. |
 | `overlays/live_odom_node.py` | The live odometry node. Subscribes to `/CAN`, publishes `/odom`. |
 | `overlays/install_live_odom.py` | Wires that node into the launch graph at image build time. |
+| `LICENSE` | MIT. |
+| `NOTICE` | What the MIT licence does not cover, chiefly your own vehicle data in `configs/`. |
 
 ## Status
 
@@ -23,10 +27,99 @@ Once loaded, the source is readable and editable inside the image at `/opt/ws/sr
 It runs the reported configuration, 26s segmentation under the BEV grid planner, with nothing installed on the host and nothing read from the host filesystem.
 
 One part is still incomplete.
-Live odometry needs the `ads_messages` package inside the image so the node can subscribe to `/CAN`.
-We have assumed that `/CAN` publishes on the live vehicle with speed and yaw rate already decoded, in which case no DBC file is needed. That assumption is unconfirmed and is item 1.1.
-Until that package is in place, run with `planner_mode:=baseline`, which ignores ego motion entirely.
-That is item 1.1 and it is the one hard blocker.
+Live odometry needs the CAN message definition inside the image so the node can subscribe to the vehicle's CAN topic.
+The signals arrive decoded on that topic, so no DBC file is needed and `live_odom_node.py` is the right shape for it.
+Until the definition is in the image, run with `planner_mode:=baseline`, which ignores ego motion entirely.
+A step rather than a blocker. Section 1 of `OPEN-ITEMS.md` lists the conventions still worth confirming.
+
+## Running the system
+
+Load the image once.
+Everything after that is a single command.
+
+```
+gunzip -c hatci-vehicle-draft1.tar.gz | docker load
+```
+
+### Check it works on this board
+
+```
+./run_vehicle.sh selftest
+```
+
+Brings the pipeline up headless, waits 45 s for the engine to deserialize and warm up, then confirms `/road_mask` and `/path` are both publishing.
+Exits non-zero if either is dead, and prints the last 40 log lines when it fails.
+Run this first on any new board, before anything is connected to a vehicle.
+
+### Enter the container
+
+```
+./run_vehicle.sh shell
+```
+
+A bash prompt inside the image, with ROS 2 and the workspace already sourced.
+Nothing else needs to be set up.
+
+| Path | What is there |
+|---|---|
+| `/opt/ros/humble` | ROS 2 Humble, 193 packages |
+| `/opt/ws/src` | the pipeline source |
+| `/opt/ws/install` | the built workspace, including the node executables |
+| `/bench/models` | the model weights and TensorRT engines |
+| `/bench/configs` | the run configurations |
+| `/bench/data` | the demo clips and the CAN logs |
+
+The source is in the image, so you can edit a node and rerun `colcon build` in place.
+Iterating on the code does not mean waiting for a new 12 GB image.
+
+### Launch the full application
+
+```
+./run_vehicle.sh bag1 can
+```
+
+That runs the configuration behind every number we reported: 26s segmentation under the BEV grid planner, with recorded odometry.
+Any `ros2 launch` argument can be appended and it wins, for example `./run_vehicle.sh bag1 can planner_mode:=baseline`.
+
+The dashboard draws on the monitor attached to the board, not on the machine you connected from.
+Over a plain ssh session there is no display, so the pipeline detects that and runs headless rather than failing.
+For a window on your own machine, connect with `ssh -X`.
+
+**A naming warning.** The modes `bag1`, `bag2` and `bag3` do **not** play a ROS bag.
+Each one is an mp4 clip plus a CAN csv, both extracted offline from the corresponding October bag.
+We are renaming these to `clip1`, `clip2` and `clip3` to stop them being mistaken for bag playback.
+
+### Select the input at runtime: camera
+
+```
+./run_vehicle.sh camera                   # the default capture index
+CAMERA_INDEX=0 ./run_vehicle.sh camera    # pick a different one
+```
+
+Camera mode relaxes the container's device rules, because the Tegra capture path needs far more than `/dev/videoN`.
+It also needs `capture-vi-channel*`, `capture-isp-channel*`, `nvhost-ctrl-vi*`, `nvmap` and `tegra_camera_ctrl`.
+Listing those with `--device` is not sufficient, because the cgroup rules still block everything not listed, and the symptom is the device opening cleanly and then every read timing out with `select() timeout`.
+
+Add `can` to use live odometry rather than running the baseline planner:
+
+```
+./run_vehicle.sh camera can
+```
+
+That path is not yet usable.
+It needs the CAN message definition built into the image, which is the package you are supplying.
+The decoded-versus-raw question this used to raise is settled: decoded, on a topic.
+
+### Select the input at runtime: ROS bag
+
+**Not implemented yet.**
+The launch file currently has two sources, `video` and `camera`.
+There is no bag source, so there is no `bag_path:=` argument to give.
+
+We are adding one.
+It will subscribe to the bag's image topic, decode it if the frames are compressed, and republish with the bag's own header timestamp so the latency measurements stay meaningful.
+Playing a bag's `/CAN` topic additionally needs the `ads_messages` message definition.
+We have confirmed that can be reconstructed from the schema embedded in the bag files, so bag playback does not wait on anything from you.
 
 ## Building the image
 
@@ -46,7 +139,7 @@ Ask us before going down that path, because it is almost certainly not what you 
 
 | Not here | Why | Where it is instead |
 |---|---|---|
-| The pipeline source | several thousand lines; it is built and installed already | in the image at `/opt/ws/src`, built at `/opt/ws/install` |
+| The *built* workspace | the source is in `src/`; this is the colcon output | in the image at `/opt/ws/install` |
 | Model weights and TensorRT engines, 395 MB | the engines are serialized against one exact TensorRT build | in the image at `/bench/models` |
 | The three demo clips, 868 MB | footage recorded from your vehicle | in the image at `/bench/data/clips` |
 | The CAN logs | extracted from your October bags; they carry `lat` and `lon` | in the image at `/bench/data/can` |

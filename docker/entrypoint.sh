@@ -63,9 +63,20 @@ fi
 # ---------------------------------------------------------------------------
 SOURCE_ARGS=()
 if [ "$MODE" = "camera" ]; then
-  # camera_index 2 is the GMSL capture on our bench carrier. HATCI's will
-  # differ; override with camera_index:=N.
-  SOURCE_ARGS=(source:=camera "camera_index:=${CAMERA_INDEX:-2}"
+  # camera_index 0 is the GMSL capture on our bench carrier; the other three
+  # channels exist in the device tree but have nothing attached. HATCI's will
+  # differ; override with CAMERA_INDEX=N.
+  #
+  # rotate_180 is on because our camera presents inverted. It is NOT a property
+  # of the pipeline, it is a property of how this camera is mounted, so check
+  # the dashboard before trusting it on different hardware: the road must be at
+  # the BOTTOM of the frame or the ground projection is wrong.
+  #
+  # NV16 is not a preference. The device advertises UYVY first and OpenCV's own
+  # V4L2 backend mis-decodes every format it offers; only NV16 pulled through a
+  # GStreamer pipeline produces a correct frame.
+  SOURCE_ARGS=(source:=camera "camera_index:=${CAMERA_INDEX:-0}"
+               "rotate_180:=${ROTATE_180:-true}" pixel_format:=NV16
                camera_fps:=30.0 width:=640)
 else
   SOURCE_ARGS=(source:=video "video_path:=$CLIPS/${CLIP_FOR[$MODE]}"

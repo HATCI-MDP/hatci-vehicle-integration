@@ -1,0 +1,37 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>perception_suite</name>
+  <version>0.0.0</version>
+  <description>Six-node ROS 2 pipeline for off-road road segmentation and path
+  planning. The nodes are thin wrappers; the algorithms live in the
+  offroad_autonomy library, which is installed with pip rather than built by
+  colcon. See src/README.md for the build sequence.</description>
+  <maintainer email="felixshn@umich.edu">shen6</maintainer>
+  <license>MIT</license>
+
+  <depend>rclpy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>cv_bridge</depend>
+  <depend>nav_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>message_filters</depend>
+  <depend>ament_index_python</depend>
+
+  <!-- offroad_autonomy is a required runtime dependency and is NOT declared as
+       a <depend> here on purpose: it is not in rosdistro, so rosdep cannot
+       resolve it under either spelling and `rosdep install` would fail. It is
+       installed with pip instead; see src/README.md. -->
+  <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

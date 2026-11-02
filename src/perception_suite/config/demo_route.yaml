@@ -1,0 +1,119 @@
+# perception.yaml for demo_route.mp4, whose dashcam shows the car's hood.
+# Only beamng.camera.ego_mask differs; keep the rest in step with
+# perception.yaml. Values marked VIDEO are still test_video.mp4's guesses.
+#
+#   ros2 launch perception_suite pipeline.launch.py video_path:=demo_route.mp4 \
+#       config:=demo_route.yaml \
+#       scene:=sandy
+
+beamng:
+  camera:
+    # VIDEO: camera height and pitch are guesses. Only the planner's
+    # image-to-ground mapping reads them.
+    height_m: 1.5
+    pitch_deg: 0.0
+    # VIDEO: the frame as video_node publishes it (1280 wide, 16:9).
+    # fov_h is a guess until the camera is known; the planner's metres and
+    # its ROI both depend on it.
+    sensor:
+      # The GMSL dashcam as it enumerates at /dev/video2.
+      width: 1920
+      height: 1080
+      # Measured, not a guess. Drives focal_px, and so every
+      # distance the planner projects to the ground.
+      fov_h: 120.0
+    # The car's hood across the bottom of demo_route.mp4, traced from the
+    # edges that stay put across the whole video. Normalised (x, y).
+    ego_mask:
+      enabled: true
+      margin_px: 2
+      polygon:
+        - [0.0, 0.81]
+        - [1.0, 0.81]
+        - [1.0, 1.0]
+        - [0.0, 1.0]
+
+perception:
+  # Segmentation models, picked with the launch argument model:=<name>. Each
+  # gives its weights (relative to the workspace root, where the launch runs)
+  # and its own planning.gate.confidence_threshold, which depends on what the
+  # model's confidence means. backend:=tensorrt builds and caches an engine
+  # from the weights on first use, so these stay .pt files.
+  models:
+    # YOLOE-26n, open-vocabulary: prompted with scene:=, and its confidence is
+    # how well the road matches the prompts.
+    yoloe:
+      weights: "yoloe-26n-seg.pt"
+      gate_confidence_threshold: 0.20
+    # YOLO26n fine-tuned for traversable road (task="semantic", classes
+    # background and traversable-roads). Fixed classes, so scene:= does not
+    # apply. It has no per-detection score, so RoadSegmenter reports 1.0 on
+    # every frame and any threshold above 0 would pass regardless of the mask:
+    # min_mask_area, min_road_pixels and the anchor check gate it instead.
+    semantic:
+      weights: "looped1-1-yolo26n-sem-t1.pt"
+      gate_confidence_threshold: 0.0
+  segmentation_threshold: 0.15
+  input_size: 640
+  # YOLOE prompt sets by scene, picked with the launch argument scene:=<name>
+  # (default trail). YOLOE scores how well the road matches the text, and the
+  # planner's gate drops frames below the model's gate_confidence_threshold,
+  # so prompts that do not describe the scene stall the planner even when the
+  # mask is right. The semantic model ignores them.
+  scenes:
+    # orfd-lane-detection's defaults, for BeamNG dirt trails.
+    trail:
+      - "traversable road"
+      - "dirt road"
+      - "off-road trail"
+      - "drivable terrain"
+      - "gravel path"
+    # On test_video.mp4 (26n): median best score 0.78, against 0.19 for trail,
+    # with a near-identical mask. "road" and "rural road" alone find nothing.
+    snow:
+      - "snow covered road"
+    # On demo_route.mp4 (26n): median best score 0.20, passing the gate on
+    # 52% of frames. Use sandy there.
+    gravel:
+      - "gravel road"
+      - "gravel path"
+      - "dirt road"
+    # Light sand and gravel roads, as in demo_route.mp4 (26n): median best
+    # score 0.41 and 89% of frames past the gate, against 0.27 and 75% for
+    # trail. YOLOE sees this surface as a path: "dirt road", "gravel road"
+    # and "unpaved road" alone each pass on under 10% of frames. Adding
+    # "drivable terrain" barely raises the score but spreads onto lawns.
+    sandy:
+      - "sandy gravel path"
+      - "sandy path"
+
+preprocessing:
+  # Half the published frame, so the aspect matches the sensor above.
+  target_width: 640
+  target_height: 360
+  enable_clahe: true
+  clahe_clip_limit: 2.0
+  clahe_grid_size: 8
+
+postprocessing:
+  enable_morphology: false
+  enable_ema: false
+  ema_alpha: 0.7
+  min_mask_area_fraction: 0.001
+  morphology_kernel_size: 5
+
+planning:
+  mode: baseline
+  # VIDEO: with pitch 0 the horizon is mid-frame, so 0.45 stops just below it
+  # (about 27 m ahead at the guessed height and FOV).
+  roi_height: 0.45
+  baseline_temporal_blend: 0.4
+  baseline_max_shift_m: 0.5
+  gate:
+    # confidence_threshold is per model: perception.models.<name>.gate_confidence_threshold.
+    min_mask_area: 0.05
+    hold_frames: 10
+    hold_speed_scale: 0.4
+  centerline_samples: 20
+  # 2000 at 720x465 in default.yaml, scaled to 640x360.
+  min_road_pixels: 1400

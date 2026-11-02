@@ -1,0 +1,51 @@
+# Notice
+
+The MIT licence in `LICENSE` covers the source code in this repository: the
+ROS 2 nodes in `src/perception_suite/`, the algorithm library in
+`src/offroad_autonomy/`, and the scripts and Dockerfile at the root.
+
+It does not cover everything that travels with this project. The items below
+are listed so nobody mistakes the licence for permission they do not have.
+
+## HATCI vehicle data
+
+`configs/tmp_26s_demo.yaml` is a configuration file, but most of the numbers in
+it are measurements of a Hyundai America Technical Center vehicle, supplied by
+HATCI or derived from recordings they provided. They are not ours to licence.
+
+- Vehicle geometry read from the bags' own `/vehicle_config`: wheelbase
+  2.815 m, maximum road wheel angle 32 degrees, camera 1.07 m ahead of the
+  rear axle.
+- Camera intrinsics from the bags' own `CameraInfo`: 2880x1860, fx 1714.2,
+  from which the 80.1 degree horizontal field of view is computed.
+- Speeds and lateral acceleration limits derived from CAN recorded on that
+  vehicle, including the per-bag median, p85, p95 and maximum figures in the
+  file's comments.
+- The hood mask polygon, traced from footage recorded by that vehicle's
+  camera.
+
+## Not in this repository
+
+Shipped separately or not at all, and listed here because the repository
+documents them:
+
+- The model weights and TensorRT engines, 395 MB. The engines are serialised
+  against one exact TensorRT build.
+- The demo clips, 868 MB. Footage recorded from the HATCI vehicle.
+- The CAN logs extracted from the October 2026 bags. They carry latitude and
+  longitude columns, so they are a GPS trace of that vehicle.
+- The container image, 12 GB compressed.
+
+## Bundled third-party
+
+- IBM Plex Sans and IBM Plex Mono, in
+  `src/offroad_autonomy/src/offroad_autonomy/visualization/fonts/`, are under
+  the SIL Open Font License, not MIT. The licence text is in that directory.
+  The dashboard loads them from disk at startup and has no fallback face.
+
+## Vendored source
+
+`src/offroad_autonomy/` is a snapshot of `HATCI-MDP/orfd-lane-detection` at
+commit `6381043`, with two files patched. The patches and what they change are
+described in `src/README.md`. It will drift from that repository unless
+somebody keeps it in step.

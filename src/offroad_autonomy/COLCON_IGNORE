@@ -1,0 +1,15 @@
+Deliberate. This library is installed with pip, not built by colcon.
+
+colcon's ament_python build type (Humble) runs `setup.py --dry-run` and then
+ast.literal_eval's the dumped metadata. This package is defined by
+pyproject.toml, whose [project] table puts a SpecifierSet object and the whole
+README into that dump, and neither is valid Python literal syntax, so the
+build fails with a SyntaxError before it compiles a single module.
+
+Making it a colcon package would mean moving the metadata back out of
+pyproject.toml into a setup.py, which downgrades the library's packaging for
+every other consumer of it. Installing it with pip is one line and is what
+docker/Dockerfile already does.
+
+Without this file colcon fails the whole workspace build. With it, colcon
+builds perception_suite and leaves this alone. See ../README.md.

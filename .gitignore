@@ -15,9 +15,10 @@
 ctx/
 
 # --- Vendored third-party source -----------------------------------------
-# perception_suite and offroad_autonomy belong to their authors.
-# build.sh copies them into the context from their own checkouts.
-# Committing a copy here would fork them silently.
+# The build context's own copies. The readable source now lives in src/ and IS
+# committed, at HATCI's request, so the packages can be reviewed without
+# loading a 12 GB image. See src/README.md: it is a snapshot of what the image
+# carries, and it will drift from the authors' own repositories.
 felix/
 bryan/
 bench/

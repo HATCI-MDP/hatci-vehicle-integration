@@ -71,8 +71,9 @@ TTY=()
 # the rules are relaxed outright. A recorded run needs none of this and does
 # not get it.
 #
-# If HATCI's policy forbids --privileged, this is the line to negotiate; see
-# question 2.3 in QUESTIONS.md.
+# Settled: the demo runs on our own Neousys, so no external container policy
+# applies here. Confirmed working on this board. See section 2 of OPEN-ITEMS.md,
+# which also notes that this reopens if deployment moves to HATCI's AGX Orin.
 # ---------------------------------------------------------------------------
 CAMERA=()
 if [ "$MODE" = "camera" ]; then

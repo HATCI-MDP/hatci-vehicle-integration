@@ -1,0 +1,9 @@
+Keeps everything under replay/ out of the pipeline workspace build.
+
+ads_messages here is a reconstruction of HATCI's message definitions, for
+replaying their recorded bags offline. It must not end up in the same
+workspace as the pipeline, because if HATCI's real package is ever installed
+alongside it, ROS 2 Humble matches on type NAME only and the two would be
+indistinguishable at runtime.
+
+Build it deliberately, into its own overlay. See ads_messages/README.md.

@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
 # Run the self-contained HATCI perception image.
 #
-#   ./run_vehicle.sh selftest        prove the image works on this board
-#   ./run_vehicle.sh bag1 can        recorded clip + recorded CAN  (the reported config)
-#   ./run_vehicle.sh camera can      live camera + live CAN bus
-#   ./run_vehicle.sh shell           a prompt inside the image
+#   ./run_vehicle.sh selftest              prove the image works on this board
+#   ./run_vehicle.sh clip1                 recorded clip, no vehicle data
+#   ./run_vehicle.sh clip1 can             clip + recorded CAN  (the BENCHMARK config)
+#   ./run_vehicle.sh replay /bags/<dir>    a real ROS bag, with its own CAN
+#   ./run_vehicle.sh replay /bags/<dir> nocan    images only
+#   ./run_vehicle.sh camera                live camera, no vehicle data
+#   ./run_vehicle.sh camera can            live camera + live CAN bus
+#   ./run_vehicle.sh shell                 a prompt inside the image
 #
 # Any ros2 launch argument is appended and therefore wins:
-#   ./run_vehicle.sh bag1 can planner_mode:=baseline
+#   ./run_vehicle.sh clip1 can planner_mode:=baseline
 #
 # Unlike the old run_pipeline.sh this mounts NO source trees. The image carries
 # the workspace prebuilt, the configs, the engines and the demo clips. The only
@@ -15,12 +19,12 @@
 # camera mode.
 set -eo pipefail
 
-IMAGE="${IMAGE:-hatci-vehicle:draft1}"
-MODE="${1:-bag1}"
+IMAGE="${IMAGE:-hatci-vehicle:draft4}"
+MODE="${1:-clip1}"
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
   echo "run_vehicle: image $IMAGE not found. Load it with:" >&2
-  echo "  gunzip -c hatci-vehicle-draft1.tar.gz | docker load" >&2
+  echo "  gunzip -c hatci-vehicle-draft4.tar.gz | docker load" >&2
   exit 1
 fi
 
@@ -81,6 +85,33 @@ if [ "$MODE" = "camera" ]; then
   echo "run_vehicle: camera mode, relaxing device rules for the Tegra capture path" >&2
 fi
 
+# ---------------------------------------------------------------------------
+# replay needs the bag visible inside the container, and visible at the SAME
+# path, so the path typed on the command line is the path rosbag2 opens. Bind
+# the bag's parent directory read-only: a multi-file bag is a directory, and
+# mounting the parent also lets the entrypoint resolve a wrapper directory one
+# level down without a second mount.
+# ---------------------------------------------------------------------------
+BAGMOUNT=()
+if [ "$MODE" = "replay" ]; then
+  BAG="${2:-}"
+  if [ -z "$BAG" ]; then
+    echo "run_vehicle: replay needs a bag path:" >&2
+    echo "  ./run_vehicle.sh replay /home/nvidia/bags/bag_20261006_125333" >&2
+    exit 1
+  fi
+  if [ ! -d "$BAG" ]; then
+    echo "run_vehicle: '$BAG' is not a directory. A ROS 2 bag is a directory" >&2
+    echo "             holding its data files and metadata.yaml." >&2
+    exit 1
+  fi
+  BAG=$(cd "$BAG" && pwd)                       # absolute, so the mount matches
+  PARENT=$(dirname "$BAG")
+  BAGMOUNT=(-v "$PARENT:$PARENT:ro")
+  set -- replay "$BAG" "${@:3}"
+  echo "run_vehicle: mounting $PARENT read-only for replay" >&2
+fi
+
 # --network host    is how the container sees can0 at all: a bus that is up on
 #                   the host needs no --device flag.
 # --ipc=host        lets the six nodes pass frames through shared memory rather
@@ -89,5 +120,5 @@ fi
 #                   the one host dependency dockerizing does not remove.
 exec docker run --rm "${TTY[@]}" \
   --runtime nvidia --network host --ipc=host \
-  "${XSOCK[@]}" "${CAMERA[@]}" \
+  "${XSOCK[@]}" "${CAMERA[@]}" ${BAGMOUNT[@]+"${BAGMOUNT[@]}"} \
   "$IMAGE" "$@"

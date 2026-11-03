@@ -1,6 +1,6 @@
 # HATCI off-road perception stack: containerized handoff
 
-Image tag `hatci-vehicle:draft1`, 34.1 GB on disk.
+Image tag `hatci-vehicle:draft4`, 34.1 GB on disk.
 
 This runs the configuration **26s segmentation under the BEV grid planner**.
 Nothing is installed on the host and nothing is read from the host filesystem: `docker load` the tarball and run it.
@@ -12,30 +12,66 @@ One part of the live path is still incomplete and it is listed there, with every
 
 ## 1. Running it
 
+Five ways to run the pipeline.
+Four are demo or deployment paths; the fifth exists to benchmark, and is called out because it is easy to mistake for a demo path and quote the wrong numbers from it.
+
 ```bash
-./run_vehicle.sh selftest        # prove the image works on this board
-./run_vehicle.sh bag1 can        # recorded clip + recorded CAN  <- the reported config
-./run_vehicle.sh bag2 can
-./run_vehicle.sh bag3 can
-./run_vehicle.sh camera can      # live camera + live CAN bus    <- see section 3
-./run_vehicle.sh shell           # a prompt inside the image
+./run_vehicle.sh selftest                     # prove the image works on this board
+./run_vehicle.sh clip1                        # 1. recorded clip, no vehicle data
+./run_vehicle.sh replay /bags/<bagdir>        # 2. a real ROS bag, with its own CAN
+./run_vehicle.sh replay /bags/<bagdir> nocan  #    the same bag, images only
+./run_vehicle.sh camera                       # 3. live camera, no vehicle data
+./run_vehicle.sh camera can                   # 4. live camera + live CAN   <- the vehicle path
+./run_vehicle.sh clip1 can                    # 5. clip + recorded CAN csv  <- BENCHMARK ONLY
+./run_vehicle.sh shell                        # a prompt inside the image
 ```
 
-Any ros2 launch argument is appended and wins: `./run_vehicle.sh bag1 can planner_mode:=baseline`.
+`clip2` and `clip3` exist alongside `clip1`.
+Any ros2 launch argument is appended and wins: `./run_vehicle.sh clip1 can planner_mode:=baseline`.
+`ros2 launch perception_suite pipeline.launch.py --show-args` inside `shell` lists all of them.
 
-`can` turns odometry on and, with it, switches the planner from the baseline centerline to the BEV grid.
+`can` turns odometry on and, with it, switches the planner from the baseline centreline to the BEV grid.
 The grid needs ego motion to register one frame against the next, so the two belong to the same switch.
+Mode 2 is the exception: a bag carries its own `/CAN`, so replay turns the grid on by itself, and `nocan` is how you turn it back off.
 
-**Run `selftest` first on any new board.**
+Measured on our bench Jetson, all six configurations, zero frame gaps except where noted:
+
+| Mode | `/road_mask` | `/path` | `/odom` |
+|---|---|---|---|
+| 1. `clip1` | 30.0 | 30.0 | - |
+| 2. `replay <bag>` | 29.8 | 29.8 | 30.3 |
+| 2. `replay <bag> nocan` | 29.8 | 29.8 | - |
+| 3. `camera` | 30.0 | 30.0 | - |
+| 4. `camera can` | 30.0 | 30.0 | - |
+| 5. `clip1 can` | 30.1 | 30.1 | 30.3 |
+
+Mode 2 drops roughly 0.4% of frames in DDS delivery, which the source node reports as frame gaps.
+Do not lower `bag_rate` to remove them: replaying below real time scales the dead-reckoned ego motion by 1/rate and stretches the BEV grid by the same factor, silently, because the odometry and the grid decay both measure time by the wall clock rather than by the recorded stamps.
+Item 1.9 in `OPEN-ITEMS.md` is the question that would let us fix that properly.
+
+Mode 4 shows no `/odom` above because there is no vehicle bus on the bench.
+It has been validated against a `/CAN` publisher fed from your bags, never against a real bus.
+
+**Three things worth knowing before any of this touches a vehicle.**
+
+Run `selftest` first on any new board.
 It brings the pipeline up headless, waits the 45 s the engine needs to deserialize and warm up, then measures `/road_mask` and `/path` and exits non-zero if either is dead.
 That is the cheapest way to find out whether the TensorRT engine is wrong for that board's JetPack, before anything is wired to a vehicle.
+
+The `/CAN` subscription is BEST_EFFORT, deliberately.
+Your bags publish `/CAN` as BEST_EFFORT, and DDS refuses to connect a RELIABLE reader to a BEST_EFFORT writer **silently**: the subscription exists, both ends appear in `ros2 topic info -v`, and not one message is delivered.
+BEST_EFFORT matches either kind of publisher, so this cannot break whichever your live publisher uses.
+
+Replaying a bag's `/CAN` needs the `ads_messages` definitions.
+The image carries our reconstruction of them in a separate overlay at `/opt/replay_ws`, and prefers your package if yours is installed.
+The entrypoint prints which one it used.
 
 Verified on our bench Jetson (L4T R36.3.0, JetPack 6.0):
 
 ```
-entrypoint: CAN odometry from bag_20261006_125333.csv, planner switches to the BEV grid
+entrypoint: CAN odometry from bag_20261006_125333.csv, BEV grid planner
 entrypoint: 7987 frames, 7998 CAN rows (0.1% apart)
-=== selftest: 26s + BEV grid on bag1, headless ===
+=== selftest: 26s + BEV grid on clip1, headless ===
 ok: /road_mask average rate: 30.385
 ok: /path      average rate: 28.979
 === selftest PASSED ===
@@ -177,9 +213,12 @@ Honest list, so nothing is discovered on your board.
 ## 7. Rebuilding
 
 ```bash
-./build.sh                       # on a board that has hatci-pipeline:v1
-TAG=hatci-vehicle:v2 ./build.sh  # under another tag
+TAG=hatci-vehicle:draft5 ./build.sh   # on a board that has hatci-pipeline:v1
 ```
+
+The default tag is `hatci-vehicle:draft4`, and `build.sh` refuses to overwrite a tag that already exists.
+That is deliberate: `draft4` is the image every number here was measured in, and rebuilding over it would replace a verified artifact with an unverified one of the same name.
+Pass a new `TAG`, or `FORCE=1` to overwrite on purpose.
 
 `build.sh` stages the context from two places.
 The two ROS packages come from a clone of this repo, so the image is built from exactly the source in `src/` and nothing else.
@@ -189,9 +228,9 @@ It writes to no source tree, and it prints the commit it built from and warns wh
 Delivering it:
 
 ```bash
-docker save hatci-vehicle:draft1 | pigz -p 6 > hatci-vehicle-draft1.tar.gz
+docker save hatci-vehicle:draft4 | pigz -p 6 > hatci-vehicle-draft4.tar.gz
 # on your board
-pigz -dc hatci-vehicle-draft1.tar.gz | docker load     # or gunzip -c
+pigz -dc hatci-vehicle-draft4.tar.gz | docker load     # or gunzip -c
 ```
 
 This is the tarball route rather than a Dockerfile build, so you need no network access and no NGC login, and you get bit-for-bit the image we benchmarked.
@@ -200,15 +239,15 @@ The built artifact, verified:
 
 | | |
 |---|---|
-| file | `hatci-vehicle-draft1.tar.gz` |
+| file | `hatci-vehicle-draft4.tar.gz` |
 | compressed | 12 GB (from 34.1 GB on disk) |
-| sha256 | `627cccac47d0676af927733ba7d41addc1f95ccb7471a18bef60bc94d985087b` |
-| checked | `pigz -t` clean; valid OCI archive (`index.json`, `manifest.json`, `oci-layout`, 62 entries) |
+| sha256 | `1f8672af83ff6c4a0b478fe766af77ef970e0c5d7a9da3c71d92c386c9b28667` |
+| checked | `pigz -t` clean; valid OCI archive (`index.json`, `manifest.json`, `oci-layout`, 65 entries) |
 
 Verify the checksum after transfer before loading:
 
 ```bash
-sha256sum -c <<< "627cccac47d0676af927733ba7d41addc1f95ccb7471a18bef60bc94d985087b  hatci-vehicle-draft1.tar.gz"
+sha256sum -c <<< "1f8672af83ff6c4a0b478fe766af77ef970e0c5d7a9da3c71d92c386c9b28667  hatci-vehicle-draft4.tar.gz"
 ```
 
 Loading needs roughly 34 GB free on your board on top of the 12 GB archive.

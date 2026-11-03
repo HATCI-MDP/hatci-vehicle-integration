@@ -27,6 +27,9 @@ downstream has to change:
     topic            odom
     type             nav_msgs/Odometry
     QoS              RELIABLE, KEEP_LAST, depth 1   (perception_suite LATEST_ONLY)
+                     Note this is the PUBLISHER. The /CAN subscription is
+                     BEST_EFFORT, which is a different matter entirely and is
+                     explained under "The QoS trap" below.
     header.stamp     the stamp of the FRAME this sample is paired with,
                      NOT now(). 5_planner_node pairs this odometry with the
                      mask derived from that frame and the pipeline is several
@@ -38,6 +41,27 @@ downstream has to change:
     pose.orientation yaw-only quaternion (0, 0, sin(h/2), cos(h/2))
     twist.linear.x   speed, m/s
     twist.angular.z  yaw rate, rad/s
+
+The QoS trap
+------------
+The /CAN subscription is BEST_EFFORT, and it has to be. DDS will not connect a
+RELIABLE reader to a BEST_EFFORT writer, since the reader is requesting a
+guarantee the writer never offered, and it declines silently: the subscription
+exists, `ros2 topic info -v` lists both ends, and not one message arrives.
+
+This was not hypothetical. Replaying HATCI's bags publishes /CAN as
+BEST_EFFORT while publishing the image topic as RELIABLE, because a bag
+replays whatever QoS it recorded for each topic. With a RELIABLE subscription
+this node logged "nothing on /CAN in the last second" forever while
+`ros2 topic hz /CAN` reported 15 Hz.
+
+If their live publisher is BEST_EFFORT too, which is the usual choice for a
+30 Hz sensor stream, a RELIABLE subscription here would have failed the same
+way on the vehicle, and it would have looked like a missing CAN package rather
+than a QoS mismatch. A BEST_EFFORT reader matches either kind of publisher, so
+it is the safe side to be on. Losing the occasional CAN sample costs nothing
+here: the node publishes one pose per FRAME, not per CAN message, and it
+already treats anything older than stale_timeout_s as no data at all.
 
 What deliberately did not change from the replay node
 -----------------------------------------------------
@@ -83,7 +107,7 @@ from rclpy.node import Node
 from rosidl_runtime_py.utilities import get_message
 from sensor_msgs.msg import Image
 
-from perception_suite.common import LATEST_ONLY
+from perception_suite.common import EXTERNAL_LATEST, LATEST_ONLY
 
 # The type is resolved at runtime rather than imported, so this module still
 # imports on a board where ads_messages is not built. That matters because
@@ -145,10 +169,14 @@ class LiveOdomNode(Node):
                 f'the container. Publishing nothing; run with '
                 f'planner_mode:=baseline until this resolves.')
         else:
-            self.create_subscription(can_type, self.topic, self.on_can, LATEST_ONLY)
+            # EXTERNAL_LATEST, not LATEST_ONLY: see common.py. The publisher
+            # is not ours, and a RELIABLE reader against a BEST_EFFORT writer
+            # does not connect and does not say so.
+            self.create_subscription(can_type, self.topic, self.on_can,
+                                     EXTERNAL_LATEST)
             self.get_logger().info(
-                f'live_odom_node: subscribed to {self.topic} ({type_name}), '
-                f'stale after {self.stale_timeout_s:.2f}s')
+                f'live_odom_node: subscribed to {self.topic} ({type_name}) '
+                f'as BEST_EFFORT, stale after {self.stale_timeout_s:.2f}s')
 
         # Report health once a second. A node that receives nothing and a node
         # whose every message is flagged look identical from outside, and

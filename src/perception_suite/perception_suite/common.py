@@ -24,6 +24,23 @@ LATEST_ONLY = QoSProfile(
     depth=1,
 )
 
+# For topics published by something OUTSIDE this pipeline, where we do not get
+# to choose the publisher's QoS. BEST_EFFORT here is not a preference, it is
+# the only setting that matches either kind of publisher: DDS refuses to
+# connect a RELIABLE reader to a BEST_EFFORT writer, because the reader is
+# asking for a guarantee the writer never offered, and it refuses SILENTLY.
+# A BEST_EFFORT reader matches both.
+#
+# Measured, not theorised: replaying HATCI's bags publishes /CAN as
+# BEST_EFFORT while publishing the image topic as RELIABLE, because a bag
+# replays the QoS it recorded per topic. A RELIABLE subscription to /CAN saw
+# nothing at all while `ros2 topic hz /CAN` showed 15 Hz.
+EXTERNAL_LATEST = QoSProfile(
+    reliability=ReliabilityPolicy.BEST_EFFORT,
+    history=HistoryPolicy.KEEP_LAST,
+    depth=1,
+)
+
 
 def load_pipeline_config(node: Node) -> PipelineConfig:
     """The config:= file with the model:= entry applied. Every stage applies

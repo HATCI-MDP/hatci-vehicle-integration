@@ -1,56 +1,122 @@
 #!/usr/bin/env bash
 # Entrypoint for the self-contained HATCI perception image.
 #
-#   docker run ... hatci-vehicle:v1 bag1 can     recorded clip + recorded CAN
-#   docker run ... hatci-vehicle:v1 camera can   live camera + live CAN bus
-#   docker run ... hatci-vehicle:v1 selftest     headless check that it works
-#   docker run ... hatci-vehicle:v1 shell        a prompt inside the image
+# FIVE ways to run the pipeline. Four are demo or deployment paths; the fifth
+# exists to benchmark, and is called out because it is easy to mistake for a
+# demo path and quote the wrong numbers from.
+#
+#   1. clip1|clip2|clip3          recorded mp4, no vehicle data.
+#                                 Baseline centreline planner.
+#   2. replay <bagpath>           a real ROS bag, WITH its CAN. Images and
+#                                 odometry come off one recording on one clock,
+#                                 so they are aligned by timestamp. The BEV
+#                                 grid planner. Add "nocan" to replay images
+#                                 only, which is how you tell a perception
+#                                 fault from a planning one.
+#   3. camera                     live camera, no vehicle data. The camera
+#                                 bring-up path: proves capture, the GMSL link
+#                                 and the six-node graph with no vehicle.
+#   4. camera can                 live camera AND live CAN. The vehicle path.
+#   5. clip1 can                  recorded mp4 + recorded CAN csv. BENCHMARK
+#                                 ONLY. This is the one configuration that runs
+#                                 the BEV grid planner at a full 30 FPS on this
+#                                 board, which is why every reported latency
+#                                 and frame-rate number comes from it. Mode 2
+#                                 cannot replace it: bag replay now reaches
+#                                 about 30 FPS, but its rate is set by the
+#                                 replayer and the H.264 decoder rather than by
+#                                 the pipeline, and it drops roughly 0.4% of
+#                                 frames getting there.
+#
+# Also:
+#   selftest                      mode 5, headless, with a pass/fail exit code
+#   shell                         a prompt inside the image
 #
 # Any ros2 launch argument is passed straight through and wins, e.g.
-#   ... bag1 can planner_mode:=baseline
+#   ... clip1 can planner_mode:=baseline
 #
 # No "set -u": the ROS setup scripts reference unbound variables.
 set -eo pipefail
 
-# The workspace was colcon-built at image build time, so this is the whole of
-# the setup the old harness did on every single start.
 source /opt/ros/humble/setup.bash
 source /opt/ws/install/setup.bash
 
 CONFIG="${CONFIG:-/bench/configs/tmp_26s_demo.yaml}"
 CLIPS=/bench/data/clips
 CANDIR=/bench/data/can
+REPLAY_WS=/opt/replay_ws/install/setup.bash
 
-# Each bag's CAN, extracted by scripts/extract_can.py. odom_node pairs frame N
-# with row N, so the clip and the csv must come from the same recording.
+IMAGE_TOPIC="${IMAGE_TOPIC:-/image_processing/image_compressed}"
+INFO_TOPIC="${IMAGE_TOPIC%/*}/camera_info"
+
+# Each clip's CAN, extracted by scripts/extract_can.py. odom_node pairs frame N
+# with row N, so the clip and the csv must come from the same recording. This
+# index pairing is exactly what mode 2 does not have to do.
 declare -A CAN_FOR=(
-  [bag1]=bag_20261006_125333.csv
-  [bag2]=bag_20261006_125811.csv
-  [bag3]=bag_20261006_130145.csv
+  [clip1]=bag_20261006_125333.csv
+  [clip2]=bag_20261006_125811.csv
+  [clip3]=bag_20261006_130145.csv
 )
 declare -A CLIP_FOR=(
-  [bag1]=hatci_bag1_lowspeed.mp4
-  [bag2]=hatci_bag2_highspeed.mp4
-  [bag3]=hatci_bag3_laneedges.mp4
+  [clip1]=hatci_bag1_lowspeed.mp4
+  [clip2]=hatci_bag2_highspeed.mp4
+  [clip3]=hatci_bag3_laneedges.mp4
 )
 
-MODE="${1:-bag1}"; shift || true
+MODE="${1:-clip1}"; shift || true
 
+# bag1|bag2|bag3 meant these mp4 clips, which was always confusing and is now
+# actively wrong next to a mode that really does play a bag. Aliased rather
+# than removed, so anything already written down keeps working.
+case "$MODE" in
+  bag1|bag2|bag3)
+    ALIAS="clip${MODE#bag}"
+    echo "entrypoint: '$MODE' is now '$ALIAS'. bag1-3 were never ROS bags, they" >&2
+    echo "entrypoint:   are mp4 clips extracted from them. Use '$ALIAS', or" >&2
+    echo "entrypoint:   'replay <bagpath>' for an actual bag. Alias still works." >&2
+    MODE="$ALIAS" ;;
+esac
+
+BAG_PATH=""
 case "$MODE" in
   shell) exec bash ;;
-  bag1|bag2|bag3|camera|selftest) ;;
+  clip1|clip2|clip3|camera|selftest) ;;
+  replay)
+    BAG_PATH="${1:-}"; shift || true
+    if [ -z "$BAG_PATH" ]; then
+      echo "entrypoint: replay needs a bag path, e.g." >&2
+      echo "entrypoint:   replay /bags/bag_20261006_125333" >&2
+      exit 1
+    fi
+    # A recording is often a wrapper directory holding the actual bag one level
+    # down, next to a metadata.json of scene labels. Pointing rosbag2 at the
+    # wrapper fails with "no plugin found that could open URI", which reads as
+    # a missing storage plugin rather than a wrong path. Resolve it here.
+    if [ ! -f "$BAG_PATH/metadata.yaml" ]; then
+      NESTED=$(find "$BAG_PATH" -mindepth 2 -maxdepth 2 -name metadata.yaml \
+               2>/dev/null | head -1)
+      if [ -n "$NESTED" ]; then
+        BAG_PATH=$(dirname "$NESTED")
+        echo "entrypoint: no metadata.yaml at the top level; using $BAG_PATH" >&2
+      else
+        echo "entrypoint: no metadata.yaml anywhere under '$BAG_PATH'." >&2
+        echo "entrypoint:   That path is not a ROS bag." >&2
+        exit 1
+      fi
+    fi ;;
   *) echo "entrypoint: unknown mode '$MODE'." >&2
-     echo "Use bag1, bag2, bag3, camera, selftest or shell." >&2
+     echo "entrypoint: Use clip1, clip2, clip3, replay <bagpath>, camera," >&2
+     echo "entrypoint:   selftest or shell." >&2
      exit 1 ;;
 esac
 
 SELFTEST=0
 if [ "$MODE" = "selftest" ]; then
   SELFTEST=1
-  MODE=bag1
+  MODE=clip1
   # The selftest exercises the configuration the report describes, which is 26s
   # under the BEV grid, so it turns odometry on. Without this it would quietly
-  # test the baseline centerline planner instead and still pass, which is the
+  # test the baseline centreline planner instead and still pass, which is the
   # wrong thing to prove on a new board.
   case " $* " in
     *" can "*|*" planner_mode:="*) ;;
@@ -59,69 +125,119 @@ if [ "$MODE" = "selftest" ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Vehicle data on or off.
+#
+# Replay defaults to ON, because a bag carries its own CAN and there is no
+# reason to throw it away. Everything else defaults to OFF, because a clip
+# needs a separately extracted csv and a live camera needs a real bus.
+# ---------------------------------------------------------------------------
+if [ "$MODE" = "replay" ]; then WANT_CAN=1; else WANT_CAN=0; fi
+ARGS=()
+for arg in "$@"; do
+  case "$arg" in
+    can)   WANT_CAN=1 ;;
+    nocan) WANT_CAN=0 ;;
+    *)     ARGS+=("$arg") ;;
+  esac
+done
+set -- ${ARGS[@]+"${ARGS[@]}"}
+
+# ---------------------------------------------------------------------------
+# ads_messages. Prefer whatever is already on the system, which on the vehicle
+# means HATCI's own package. Fall back to our reconstruction, which is correct
+# for replaying their bags and is NOT what should decode a live bus: Humble
+# matches publisher to subscriber on type name alone, with no structural check,
+# so a version skew against ours would decode to silent garbage.
+# ---------------------------------------------------------------------------
+ensure_ads_messages () {
+  if ros2 pkg prefix ads_messages >/dev/null 2>&1; then
+    echo "entrypoint: ads_messages already present; using that one." >&2
+    return 0
+  fi
+  if [ -f "$REPLAY_WS" ]; then
+    source "$REPLAY_WS"
+    echo "entrypoint: using OUR reconstructed ads_messages ($REPLAY_WS)." >&2
+    echo "entrypoint:   Rebuilt from the schema embedded in HATCI's bags, so it" >&2
+    echo "entrypoint:   is correct for replaying those. For a LIVE bus, install" >&2
+    echo "entrypoint:   HATCI's package instead." >&2
+    return 0
+  fi
+  return 1
+}
+
+# ---------------------------------------------------------------------------
 # Source
 # ---------------------------------------------------------------------------
 SOURCE_ARGS=()
-if [ "$MODE" = "camera" ]; then
-  # camera_index 0 is the GMSL capture on our bench carrier; the other three
-  # channels exist in the device tree but have nothing attached. HATCI's will
-  # differ; override with CAMERA_INDEX=N.
-  #
-  # rotate_180 is on because our camera presents inverted. It is NOT a property
-  # of the pipeline, it is a property of how this camera is mounted, so check
-  # the dashboard before trusting it on different hardware: the road must be at
-  # the BOTTOM of the frame or the ground projection is wrong.
-  #
-  # NV16 is not a preference. The device advertises UYVY first and OpenCV's own
-  # V4L2 backend mis-decodes every format it offers; only NV16 pulled through a
-  # GStreamer pipeline produces a correct frame.
-  SOURCE_ARGS=(source:=camera "camera_index:=${CAMERA_INDEX:-0}"
-               "rotate_180:=${ROTATE_180:-true}" pixel_format:=NV16
-               camera_fps:=30.0 width:=640)
-else
-  SOURCE_ARGS=(source:=video "video_path:=$CLIPS/${CLIP_FOR[$MODE]}"
-               loop:=true video_fps:=30.0 width:=640)
-fi
-
-# ---------------------------------------------------------------------------
-# Odometry. "can" anywhere in the remaining arguments turns it on, and with it
-# the BEV grid planner - the grid needs ego motion to register one frame
-# against the next, so the two belong to the same switch.
-#
-# A recorded clip gets the recorded csv; the live camera gets the live bus.
-# ---------------------------------------------------------------------------
 CAN_ARGS=()
-ARGS=()
-for arg in "$@"; do
-  if [ "$arg" = "can" ]; then
-    if [ "$MODE" = "camera" ]; then
-      TOPIC="${CAN_TOPIC:-/CAN}"
-      CAN_ARGS=("can_topic:=$TOPIC")
-      echo "entrypoint: live odometry from $TOPIC, planner switches to the BEV grid" >&2
-      echo "entrypoint: NOTE this needs the ads_messages package built into the" >&2
-      echo "entrypoint:      image. Without it live_odom_node cannot resolve the" >&2
-      echo "entrypoint:      message type, publishes nothing, and the grid forgets" >&2
-      echo "entrypoint:      every frame. Add planner_mode:=baseline for now." >&2
+
+case "$MODE" in
+  camera)
+    # camera_index 0 is the GMSL capture on our bench carrier; the other three
+    # channels exist in the device tree but have nothing attached. HATCI's will
+    # differ; override with CAMERA_INDEX=N.
+    #
+    # rotate_180 is on because our camera presents inverted. It is NOT a
+    # property of the pipeline, it is a property of how this camera is mounted,
+    # so check the dashboard before trusting it on different hardware: the road
+    # must be at the BOTTOM of the frame or the ground projection is wrong.
+    #
+    # NV16 is not a preference. The device advertises UYVY first and OpenCV's
+    # own V4L2 backend mis-decodes every format it offers; only NV16 pulled
+    # through a GStreamer pipeline produces a correct frame.
+    SOURCE_ARGS=(source:=camera "camera_index:=${CAMERA_INDEX:-0}"
+                 "rotate_180:=${ROTATE_180:-true}" pixel_format:=NV16
+                 camera_fps:=30.0 width:=640)
+    if [ "$WANT_CAN" = 1 ]; then
+      if ! ensure_ads_messages; then
+        echo "entrypoint: live CAN needs the ads_messages package and none was" >&2
+        echo "entrypoint:   found. Install HATCI's, or rebuild this image with" >&2
+        echo "entrypoint:   replay/ staged. Continuing WITHOUT odometry." >&2
+        WANT_CAN=0
+      else
+        CAN_ARGS=("can_topic:=${CAN_TOPIC:-/CAN}")
+        echo "entrypoint: live odometry from ${CAN_TOPIC:-/CAN}, BEV grid planner" >&2
+      fi
+    fi ;;
+
+  replay)
+    SOURCE_ARGS=(source:=bag "bag_path:=$BAG_PATH" width:=640)
+    if [ "$WANT_CAN" = 1 ]; then
+      if ! ensure_ads_messages; then
+        echo "entrypoint: cannot deserialize /CAN without ads_messages." >&2
+        echo "entrypoint:   Replaying images only; baseline planner." >&2
+        WANT_CAN=0
+      fi
+    fi
+    if [ "$WANT_CAN" = 1 ]; then
+      SOURCE_ARGS+=("bag_topics:=$IMAGE_TOPIC $INFO_TOPIC /CAN /vehicle_config")
+      CAN_ARGS=("can_topic:=${CAN_TOPIC:-/CAN}")
+      echo "entrypoint: replaying $BAG_PATH with its own CAN; BEV grid planner" >&2
     else
+      SOURCE_ARGS+=("bag_topics:=$IMAGE_TOPIC $INFO_TOPIC")
+      echo "entrypoint: replaying $BAG_PATH, images only; baseline planner" >&2
+    fi ;;
+
+  *)
+    SOURCE_ARGS=(source:=video "video_path:=$CLIPS/${CLIP_FOR[$MODE]}"
+                 loop:=true video_fps:=30.0 width:=640)
+    if [ "$WANT_CAN" = 1 ]; then
       CSV="$CANDIR/${CAN_FOR[$MODE]}"
       if [ ! -f "$CSV" ]; then
         echo "entrypoint: $CSV is missing from the image." >&2
         exit 1
       fi
       CAN_ARGS=("can_csv:=$CSV")
-      echo "entrypoint: CAN odometry from $(basename "$CSV"), planner switches to the BEV grid" >&2
-    fi
-  else
-    ARGS+=("$arg")
-  fi
-done
-set -- "${ARGS[@]}"
+      echo "entrypoint: CAN odometry from $(basename "$CSV"), BEV grid planner" >&2
+    fi ;;
+esac
 
 # odom_node pairs frame N with CAN row N, so a clip and a csv of different
 # lengths silently feed the planner motion from a different part of the drive.
 # The presets always match; an overriding video_path:= need not, and the
-# failure is invisible rather than loud.
-if [ ${#CAN_ARGS[@]} -gt 0 ] && [ "$MODE" != "camera" ]; then
+# failure is invisible rather than loud. Mode 2 does not need this check at
+# all, because a bag aligns by timestamp instead of by index.
+if [ ${#CAN_ARGS[@]} -gt 0 ] && [ "$MODE" != "camera" ] && [ "$MODE" != "replay" ]; then
   CLIP_PATH="$CLIPS/${CLIP_FOR[$MODE]}"
   for arg in "$@"; do
     case "$arg" in video_path:=*) CLIP_PATH="${arg#video_path:=}" ;; esac
@@ -169,7 +285,8 @@ if [ "$SELFTEST" = "1" ]; then
   echo "=== selftest: 26s + BEV grid on $MODE, headless ===" >&2
   LOG=$(mktemp)
   ros2 launch perception_suite pipeline.launch.py "config:=$CONFIG" \
-    "${SOURCE_ARGS[@]}" "${CAN_ARGS[@]}" visualize:=false "$@" >"$LOG" 2>&1 &
+    "${SOURCE_ARGS[@]}" ${CAN_ARGS[@]+"${CAN_ARGS[@]}"} visualize:=false "$@" \
+    >"$LOG" 2>&1 &
   LAUNCH_PID=$!
   trap 'kill -INT $LAUNCH_PID 2>/dev/null || true' EXIT
 
@@ -214,4 +331,4 @@ if [ "$SELFTEST" = "1" ]; then
 fi
 
 exec ros2 launch perception_suite pipeline.launch.py "config:=$CONFIG" \
-  "${SOURCE_ARGS[@]}" "${CAN_ARGS[@]}" "${VIS_ARGS[@]}" "$@"
+  "${SOURCE_ARGS[@]}" ${CAN_ARGS[@]+"${CAN_ARGS[@]}"} "${VIS_ARGS[@]}" "$@"

@@ -4,11 +4,13 @@
     ros2 launch perception_suite pipeline.launch.py source:=video video_path:=other.mp4
     ros2 launch perception_suite pipeline.launch.py source:=camera
     ros2 launch perception_suite pipeline.launch.py source:=camera camera_index:=0
+    ros2 launch perception_suite pipeline.launch.py source:=bag bag_path:=/bags/bag_20261006_125333
     ros2 launch perception_suite pipeline.launch.py scene:=snow
     ros2 launch perception_suite pipeline.launch.py visualize:=false
     ros2 launch perception_suite pipeline.launch.py backend:=tensorrt
     ros2 launch perception_suite pipeline.launch.py model:=semantic backend:=tensorrt
-    ros2 launch perception_suite pipeline.launch.py config:=demo_route.yaml video_path:=demo_route.mp4
+    ros2 launch perception_suite pipeline.launch.py config:=demo_route.yaml \
+        video_path:=demo_route.mp4
 
 config:= is the input (a YAML file name in src/perception_suite/config),
 model:= the segmentation model, backend:= how it runs and scene:= its prompts;
@@ -17,7 +19,8 @@ relative video and weight paths point.
 """
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, OpaqueFunction, TimerAction
+from launch.actions import (DeclareLaunchArgument, ExecuteProcess,
+                            OpaqueFunction, TimerAction)
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
@@ -28,9 +31,20 @@ from perception_suite import settings
 SOURCES = {
     'video': ('1_video_node', ['video_path', 'loop', 'video_fps', 'width']),
     'camera': ('1_camera_node', ['camera_index', 'camera_fps', 'width',
+                                 'capture_width', 'capture_height',
                                  'pixel_format', 'rotate_180',
                                  'warmup_frames']),
+    'bag': ('1_bag_node', ['image_topic', 'width', 'source_width',
+                           'source_height', 'decoder', 'queue_depth',
+                           'decode_backend']),
 }
+
+# 1_video_node declares an int default for width, the other two declare strings.
+STRING_WIDTH_SOURCES = ('camera', 'bag')
+
+
+def _is_true(value):
+    return str(value).strip().lower() in ('1', 'true', 'yes', 'y', 'on')
 
 
 def _validated(context):
@@ -58,14 +72,36 @@ def _source(context):
     # type they declare: 1_video_node uses an integer default, 1_camera_node a
     # string one. rclpy rejects a mismatch with InvalidParameterTypeException,
     # so coerce to whatever this source expects rather than to one type for both.
-    parameters['width'] = (str(parameters['width']) if name == 'camera'
+    parameters['width'] = (str(parameters['width'])
+                           if name in STRING_WIDTH_SOURCES
                            else int(parameters['width']))
     node = Node(package='perception_suite', executable=executable, name='source_node',
                 parameters=[parameters], output='screen')
     # Frames sent while the segmenter is still loading its model are dropped,
     # so the source waits for the stages to come up.
     delay = float(LaunchConfiguration('source_delay').perform(context))
-    return [TimerAction(period=delay, actions=[node])]
+    actions = [TimerAction(period=delay, actions=[node])]
+
+    # source:=bag decodes a topic rather than reading a file, so something has
+    # to publish that topic. A bag is the usual answer and is what HATCI asked
+    # for, but an empty bag_path is legitimate: the same node serves a live
+    # camera node publishing the same topic. See item 3.8 in OPEN-ITEMS.md.
+    if name == 'bag':
+        path = LaunchConfiguration('bag_path').perform(context)
+        if path:
+            command = ['ros2', 'bag', 'play', path,
+                       '--rate', LaunchConfiguration('bag_rate').perform(context),
+                       '--topics']
+            command += LaunchConfiguration('bag_topics').perform(context).split()
+            if _is_true(LaunchConfiguration('bag_loop').perform(context)):
+                command.append('--loop')
+            # Started after the decoder is subscribed. An H.264 stream cannot
+            # be joined mid-GOP, so missing the first keyframe costs every
+            # frame up to the next one.
+            actions.append(TimerAction(
+                period=delay + 2.0,
+                actions=[ExecuteProcess(cmd=command, output='screen')]))
+    return actions
 
 
 def generate_launch_description():
@@ -90,6 +126,17 @@ def generate_launch_description():
                                           'but have nothing attached'),
         DeclareLaunchArgument('camera_fps', default_value='30.0',
                               description='capture rate for source:=camera'),
+        DeclareLaunchArgument('capture_width', default_value='1920',
+                              description='What the sensor is asked to deliver\n'
+                                          'for source:=camera, before the\n'
+                                          'downscale to width. 1920x1080 is what\n'
+                                          'our GMSL dashcam offers; a different\n'
+                                          'camera will need its own mode, and\n'
+                                          'V4L2 silently substitutes the nearest\n'
+                                          'supported one rather than failing'),
+        DeclareLaunchArgument('capture_height', default_value='1080',
+                              description='Sensor capture height for '
+                                          'source:=camera; see capture_width'),
         DeclareLaunchArgument('pixel_format', default_value='NV16',
                               description='Sensor pixel format for source:=camera. '
                                           'NV16 is the only one that decodes '
@@ -116,6 +163,63 @@ def generate_launch_description():
                                           'width removes a resample and 4x the bytes'),
         DeclareLaunchArgument('video_path', default_value='test_video.mp4',
                               description='Video file for source:=video'),
+        DeclareLaunchArgument('bag_path', default_value='',
+                              description='Bag to replay for source:=bag. Left\n'
+                                          'empty, the node still runs and waits\n'
+                                          'for whatever else publishes the topic.\n'
+                                          'Note: SIGKILLing launch before it has\n'
+                                          'shut down can leave the player running,\n'
+                                          'and a second player on the same topic\n'
+                                          'shows up as the frame counter jumping\n'
+                                          'backwards. Let launch exit properly.'),
+        DeclareLaunchArgument('bag_topics',
+                              default_value='/image_processing/image_compressed '
+                                            '/image_processing/camera_info',
+                              description='Topics to replay. Only these two by\n'
+                                          'default, because replaying /CAN needs\n'
+                                          'the ads_messages package installed.'),
+        DeclareLaunchArgument('bag_loop', default_value='false',
+                              description='Replay the bag end to end repeatedly'),
+        DeclareLaunchArgument('bag_rate', default_value='1.0',
+                              description='Replay speed for source:=bag. LEAVE IT\n'
+                                          'AT 1.0. Lowering it is tempting, because\n'
+                                          'it removes the frame gaps below, but it\n'
+                                          'breaks the odometry: live_odom_node\n'
+                                          'integrates dead reckoning on wall-clock\n'
+                                          'arrival time, and the BEV grid decays on\n'
+                                          'wall-clock too, so at rate r the ego\n'
+                                          'motion is scaled by 1/r and the grid is\n'
+                                          'stretched by the same factor. At 0.5 the\n'
+                                          'vehicle appears to travel twice as far\n'
+                                          'as it did and curvature reads half what\n'
+                                          'it is. Nothing warns you.\n'
+                                          'The cost of 1.0 is about 6 counter gaps\n'
+                                          'in 52 s on this board, roughly 0.4% of\n'
+                                          'frames, lost in DDS delivery because the\n'
+                                          'player publishes KEEP_LAST. A stretched\n'
+                                          'map is the worse of the two.'),
+        DeclareLaunchArgument('image_topic',
+                              default_value='/image_processing/image_compressed',
+                              description='Compressed H.264 topic for source:=bag'),
+        DeclareLaunchArgument('source_width', default_value='2880',
+                              description='Native frame width for source:=bag,\n'
+                                          'used only to keep the aspect ratio'),
+        DeclareLaunchArgument('source_height', default_value='1860',
+                              description='Native frame height for source:=bag'),
+        DeclareLaunchArgument('decoder', default_value='nvv4l2decoder',
+                              description='GStreamer H.264 decoder for\n'
+                                          'source:=bag. avdec_h264 is the\n'
+                                          'software fallback.'),
+        DeclareLaunchArgument('queue_depth', default_value='200',
+                              description='Subscription depth for source:=bag. A\n'
+                                          'dropped message corrupts a P-frame\n'
+                                          'stream, so this is deliberately deep.'),
+        DeclareLaunchArgument('decode_backend', default_value='auto',
+                              description='How source:=bag decodes H.264.\n'
+                                          'appsink decodes in-process and is\n'
+                                          'faster; subprocess shells out to\n'
+                                          'gst-launch and needs no python3-gi.\n'
+                                          'auto prefers appsink when available.'),
         DeclareLaunchArgument('loop', default_value='true',
                               description='Restart the video at the end instead of '
                                           'stopping, for source:=video; false plays it once'),
@@ -153,12 +257,30 @@ def generate_launch_description():
                                           'vehicle. Needs the CAN message package '
                                           'built into the image so the type can be '
                                           'resolved; see OPEN-ITEMS.md section 1'),
+        DeclareLaunchArgument('can_msg_type',
+                              default_value='ads_messages/msg/CANMsg',
+                              description='ROS type on can_topic. Recovered\n'
+                                          'from the Oct 2026 bags, which is\n'
+                                          'why it is a default and not a\n'
+                                          'certainty: if your live bus\n'
+                                          'publishes a different type, set it\n'
+                                          'here rather than editing the node.\n'
+                                          'Resolved at runtime, so a wrong\n'
+                                          'value leaves the grid without\n'
+                                          'odometry instead of failing the\n'
+                                          'whole pipeline'),
         DeclareLaunchArgument('can_csv', default_value='',
                               description='Extracted CAN csv to replay as odometry. '
                                           'Empty disables the node, and the planner '
                                           'then falls back to its static speed_mps'),
         DeclareLaunchArgument('speed_mps', default_value='0.0',
                               description='Fixed vehicle speed given to the planner'),
+        DeclareLaunchArgument('frame_id', default_value='base_link',
+                              description='frame_id on the published Path.\n'
+                                          'Origin on the ground below the\n'
+                                          'camera, x forward, y left (REP 103).\n'
+                                          'Change it to whatever your TF tree\n'
+                                          'calls that frame'),
         DeclareLaunchArgument('visualize', default_value='true',
                               description='Open the visualizer window'),
         # First, so a bad config, model, scene or source fails before any
@@ -171,12 +293,14 @@ def generate_launch_description():
              condition=IfCondition(
                  PythonExpression(["'", LaunchConfiguration('can_csv'), "' != ''"]))),
         Node(package='perception_suite', executable='live_odom_node', output='screen',
-             parameters=[{'can_topic': LaunchConfiguration('can_topic')}],
+             parameters=[{'can_topic': LaunchConfiguration('can_topic'),
+                          'can_msg_type': LaunchConfiguration('can_msg_type')}],
              condition=IfCondition(
                  PythonExpression(["'", LaunchConfiguration('can_topic'), "' != ''"]))),
         stage('4_postprocess_node'),
         stage('5_planner_node', {
             'speed_mps': LaunchConfiguration('speed_mps'),
+            'frame_id': LaunchConfiguration('frame_id'),
             # A CAN csv is only useful to the grid planner, so supplying one
             # selects it; the baseline planner ignores ego motion entirely.
             # An explicit planner_mode wins; otherwise a CAN csv selects grid.

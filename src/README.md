@@ -1,7 +1,7 @@
 # Pipeline source
 
 Two packages.
-Together they are what runs in `hatci-vehicle:draft1`, the image every reported number was measured in.
+Together they are what runs in `hatci-vehicle:draft4`, the image every reported number was measured in.
 
 | Path | What it is | Build system |
 |---|---|---|

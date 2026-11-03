@@ -30,6 +30,7 @@ setup(
     'console_scripts': [
             'live_odom_node = perception_suite.live_odom_node:main',
             'odom_node = perception_suite.odom_node:main',
+        '1_bag_node = perception_suite.1_bag_node:main',
         '1_video_node = perception_suite.1_video_node:main',
         '1_camera_node = perception_suite.1_camera_node:main',
         '2_preprocess_node = perception_suite.2_preprocess_node:main',

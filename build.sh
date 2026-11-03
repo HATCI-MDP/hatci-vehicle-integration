@@ -16,11 +16,22 @@ set -eo pipefail
 REPO="${REPO:-/home/nvidia/hatci-vehicle-integration}"
 BENCH="${BENCH:-/home/nvidia/bench-ros}"
 CTX="${CTX:-/home/nvidia/handoff/ctx}"
-TAG="${TAG:-hatci-vehicle:draft2}"
+TAG="${TAG:-hatci-vehicle:draft4}"
 
 for d in "$REPO/src/perception_suite" "$REPO/src/offroad_autonomy" "$BENCH/models"; do
   [ -d "$d" ] || { echo "build: missing $d" >&2; exit 1; }
 done
+
+# draft4 is the image every number in README.md was measured in. Rebuilding
+# over that tag would replace a verified artifact with an unverified one of the
+# same name, and nothing downstream could tell the difference, so refuse unless
+# asked twice.
+if docker image inspect "$TAG" >/dev/null 2>&1 && [ -z "$FORCE" ]; then
+  echo "build: $TAG already exists." >&2
+  echo "build:   TAG=hatci-vehicle:draft5 ./build.sh   build under a new name" >&2
+  echo "build:   FORCE=1 ./build.sh                    overwrite it deliberately" >&2
+  exit 1
+fi
 
 echo "=== source provenance ==="
 git -C "$REPO" --no-pager log -1 --format='repo   %h %s' || true
@@ -42,6 +53,12 @@ cp -a "$BENCH/overlays" "$CTX/bench/overlays"
 # The two packages, from the repo. Paths match the Dockerfile's COPY lines.
 cp -a "$REPO/src/perception_suite"  "$CTX/src/perception_suite"
 cp -a "$REPO/src/offroad_autonomy"  "$CTX/src/offroad_autonomy"
+
+# The replay-only ads_messages reconstruction. Staged separately and built into
+# its own overlay, never into the pipeline workspace: ROS 2 Humble matches
+# publisher to subscriber on type NAME alone, so ours and HATCI's real package
+# are indistinguishable at runtime and must never be live together.
+cp -a "$REPO/replay"                "$CTX/replay"
 
 # Big trees: real copies. Hardlinks would be free, but most of these files are
 # root-owned and /proc/sys/fs/protected_hardlinks forbids linking a file you do

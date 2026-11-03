@@ -169,9 +169,9 @@ Honest list, so nothing is discovered on your board.
 
 1. **The CAN message definition is not in the image yet.** Live odometry publishes nothing until it is, because the node cannot resolve the `/CAN` type without it. HATCI are supplying the package; we have also confirmed we can reconstruct it from the schema embedded in the bags if needed. No longer a blocker, but still a step.
 2. **Camera height and pitch are guesses.** 1.5 m and 0.0 degrees. Items 3.1, 3.2.
-3. **The live camera path is untested against your hardware.** `camera_index:=2` is our Neousys carrier's GMSL capture.
+3. **The live camera path is tested on our carrier, not yours.** `camera_index:=0` is our Neousys carrier's GMSL capture, and the full pipeline runs live off it at 30 FPS. What is still open is the interface and connector your camera uses, which is item 5.1. Note also that this hardware does not hot-plug, so the camera has to be attached before the board is powered on; item 5.4 has the detail.
 4. **Nothing detects missing odometry.** `5_planner_node` marks every odometry message it receives as valid. Our node goes silent rather than publishing a stale pose, which makes the grid forget, but a vehicle probably wants the planner to hold or hand back control. Item 1.8.
-5. **`/command` is a `Float32MultiArray` with no header.** Needs a real typed interface and something to subscribe to it. Item 4.2.
+5. **`/command` is a `Float32MultiArray` with no header.** Needs a real typed interface and something to subscribe to it. Item 4.1.
 6. **The image is 34 GB.** It carries all four models at two input sizes each and three 300 MB demo clips. Trimming to 26s only and one clip would cut it substantially; worth doing once the configuration is locked.
 
 ## 7. Rebuilding
@@ -181,7 +181,10 @@ Honest list, so nothing is discovered on your board.
 TAG=hatci-vehicle:v2 ./build.sh  # under another tag
 ```
 
-`build.sh` assembles a context from the scattered source trees rather than pointing at one repo, skipping the roughly 3.3 GB of stray engines and test videos and the 740 MB `.git` that nothing reads. It writes to no source tree.
+`build.sh` stages the context from two places.
+The two ROS packages come from a clone of this repo, so the image is built from exactly the source in `src/` and nothing else.
+What cannot be published comes off the board: the model weights and TensorRT engines, the demo clips, the extracted CAN csvs, and `bench-ros/scripts`.
+It writes to no source tree, and it prints the commit it built from and warns when that tree is dirty, so an image can be traced back to a commit.
 
 Delivering it:
 

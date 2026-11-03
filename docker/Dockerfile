@@ -28,6 +28,25 @@ FROM hatci-pipeline:v1
 SHELL ["/bin/bash", "-lc"]
 
 # ---------------------------------------------------------------------------
+# 0. The mcap storage plugin, so the image can open HATCI's bags at all.
+#
+#    Their October bags are mcap, not sqlite3. Without this plugin "ros2 bag
+#    play" dies with "Could not load/open plugin with storage id 'mcap'", while
+#    "ros2 bag info" still works because it only reads metadata.yaml. That
+#    combination is why the gap went unnoticed: the bag looks readable.
+#
+#    Versions are pinned to the rosbag2 release already in this base image
+#    (0.15.17), so this is a purely additive install. It upgrades nothing, and
+#    the environment every R1 number was measured in stays intact. Do not
+#    relax these pins to bare package names without rechecking that.
+# ---------------------------------------------------------------------------
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ros-humble-mcap-vendor=0.15.17-1jammy.20260909.220900 \
+      ros-humble-rosbag2-storage-mcap=0.15.17-1jammy.20260909.221142 \
+ && rm -rf /var/lib/apt/lists/*
+
+# ---------------------------------------------------------------------------
 # 1. The bench tree: configs, models, overlays, helper scripts, demo clips.
 # ---------------------------------------------------------------------------
 COPY bench /bench
@@ -41,19 +60,30 @@ COPY src/perception_suite /src/perception_suite
 # ---------------------------------------------------------------------------
 # 3. The offroad_autonomy library (planning and perception), shimmed and installed.
 #
-#    semantic_shim.py teaches RoadSegmenter to consume a task='semantic' model.
-#    Upstream reads result.masks and result.boxes.conf, which is the
-#    task='segment' contract; a semantic model returns a full-resolution class
-#    index map and has NO per-detection score. The shim substitutes road pixel
-#    fraction within the ROI as the gate confidence, which is why these configs
-#    carry their own gate threshold (0.0) and why their confidence values must
-#    never be compared against a YOLOE model's.
+#    semantic_shim.py runs three patches, and at the pinned commit only two of
+#    them actually change anything. Worth knowing before reading its docstring,
+#    which describes the third:
 #
-#    Applied to the copy, never to the repo, exactly as the harness did.
+#      fix_class.py    picks the road class by what the model PREDICTS, not
+#                      only by what it declares. Without it the new weights,
+#                      which name road "Final-Demo", give 100% empty masks.
+#      path_memory.py  stops the dashboard drawing planned path over the bonnet
+#                      in the same solid colour as road it can actually see.
+#      the shim itself  STANDS DOWN. It adapts RoadSegmenter to a
+#                      task='semantic' model, but the library already supports
+#                      that at this commit, so the shim detects it and returns
+#                      without patching. It is kept because it is the chain's
+#                      entry point and because it still applies to older trees.
+#
+#    All three are idempotent and exit 0 when already applied, so running this
+#    against source that is already patched is a no-op rather than an error.
+#    That is what makes the build work from the published src/ tree.
+#
+#    Applied to the copy, never to the source tree, exactly as the harness did.
 # ---------------------------------------------------------------------------
 COPY src/offroad_autonomy /src/offroad_autonomy
 RUN cp -r /src/offroad_autonomy /tmp/build \
- && python3 /bench/scripts/semantic_shim.py --repo /tmp/build \
+ && python3 /src/offroad_autonomy/patches/semantic_shim.py --repo /tmp/build \
  && pip install --no-deps --no-build-isolation /tmp/build \
  && rm -rf /tmp/build
 

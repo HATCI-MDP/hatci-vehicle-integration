@@ -7,7 +7,7 @@ from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
 from offroad_autonomy.preprocessing.image_preprocessor import ImagePreprocessor
 
-from perception_suite.common import LATEST_ONLY, load_pipeline_config
+from perception_suite.common import LATEST_ONLY, StageTimer, load_pipeline_config
 
 
 class PreprocessNode(Node):
@@ -18,15 +18,18 @@ class PreprocessNode(Node):
         config = load_pipeline_config(self)
         self.preprocessor = ImagePreprocessor(config)
         self.bridge = CvBridge()
+        self.stage_timer = StageTimer(self, 'preprocess')
         self.publisher = self.create_publisher(Image, 'preprocessed_frames', 10)
         self.subscription = self.create_subscription(
             Image, 'raw_frames', self.on_frame, LATEST_ONLY)
 
     def on_frame(self, msg):
+        t0 = self.stage_timer.start()
         packet = self.preprocessor.process(self.bridge.imgmsg_to_cv2(msg, 'bgr8'))
         out = self.bridge.cv2_to_imgmsg(packet.preprocessed, 'bgr8')
         out.header = msg.header
         self.publisher.publish(out)
+        self.stage_timer.done(t0, msg.header)
 
 
 def main(args=None):

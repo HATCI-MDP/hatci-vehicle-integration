@@ -65,6 +65,23 @@ def test_runtime_stats_mean_p95_and_rate():
     assert stats.fps() == pytest.approx(20.0)
 
 
+def test_runtime_stats_p50_is_the_median_not_the_mean():
+    # A minority of slow frames pulls the mean well above the median. An earlier
+    # version of the dashboard printed the mean under a "p50" label, which
+    # overstated the latency most frames actually see, so the two must differ
+    # here or the test cannot tell them apart.
+    stats = RuntimeStats(window=100)
+    for _ in range(90):
+        stats.record("stage", 10.0)
+    for _ in range(10):
+        stats.record("stage", 100.0)
+
+    summary = stats.stage("stage")
+    assert summary.p50_ms == pytest.approx(10.0)
+    assert summary.mean_ms == pytest.approx(19.0)
+    assert summary.p95_ms == pytest.approx(100.0)
+
+
 def test_runtime_stats_window_is_bounded():
     stats = RuntimeStats(window=10)
     for value in range(1000):

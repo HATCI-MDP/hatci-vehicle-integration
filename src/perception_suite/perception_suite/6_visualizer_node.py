@@ -6,6 +6,7 @@ import time
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
+from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.time import Time
 from sensor_msgs.msg import Image
 from nav_msgs.msg import Path
@@ -32,6 +33,25 @@ from perception_suite.common import decode_mask, load_pipeline_config
 
 # Same title as orfd-lane-detection's dashboard window.
 WINDOW = "Off-Road Autonomy Dashboard"
+
+# The dashboard draws slower than the camera produces, about 24 FPS against 30,
+# so any queue in front of it sits permanently full and every frame it shows is
+# as old as that queue is deep. Both the DDS reader and the synchronizer
+# defaulted to 10, which put the picture 366 ms behind the vehicle while the
+# planner was working on frames 53 ms old. Nothing was wrong with the planning;
+# the operator was just watching the past.
+#
+# Depth 2 and not 1: these four topics come from three different nodes and
+# arrive up to 19 ms apart, and TimeSynchronizer only fires once it holds the
+# same stamp from all four. A single slot discards one of a set whenever a
+# render overruns, so the dashboard would skip far more frames than it has to.
+# Two slots bound the staleness at two frame periods and still absorb the skew.
+DISPLAY_QOS = QoSProfile(
+    reliability=ReliabilityPolicy.RELIABLE,
+    history=HistoryPolicy.KEEP_LAST,
+    depth=2,
+)
+SYNC_QUEUE = 2
 
 
 class VisualizationNode(Node):
@@ -80,15 +100,17 @@ class VisualizationNode(Node):
         self.bridge = CvBridge()
 
         # All four share the source frame's stamp and arrive once per segmented
-        # frame, so they match however slow segmentation is.
+        # frame, so they match however slow segmentation is. See DISPLAY_QOS
+        # for why both depths are small: this subscriber is the only one in the
+        # pipeline that is routinely slower than its publisher.
         self.sync = TimeSynchronizer(
             [
-                Subscriber(self, Image, 'segmented_frames'),
-                Subscriber(self, Image, 'road_mask'),
-                Subscriber(self, Image, 'stabilized_mask'),
-                Subscriber(self, Path, 'path'),
+                Subscriber(self, Image, 'segmented_frames', qos_profile=DISPLAY_QOS),
+                Subscriber(self, Image, 'road_mask', qos_profile=DISPLAY_QOS),
+                Subscriber(self, Image, 'stabilized_mask', qos_profile=DISPLAY_QOS),
+                Subscriber(self, Path, 'path', qos_profile=DISPLAY_QOS),
             ],
-            queue_size=10,
+            queue_size=SYNC_QUEUE,
         )
         self.sync.registerCallback(self.display_callback)
         # Show something straight away: nothing reaches display_callback until
@@ -139,7 +161,7 @@ class VisualizationNode(Node):
             render = self.stats.stage('dashboard_render')
             self.get_logger().info(
                 f'render rate {self.stats.fps():.1f} FPS | '
-                f'capture-to-display p50 {latency.mean_ms:.1f} ms | '
+                f'capture-to-display p50 {latency.p50_ms:.1f} ms | '
                 f'render {render.mean_ms:.1f} ms | n={self._viz_n}')
 
         cv2.imshow(WINDOW, canvas)

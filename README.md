@@ -102,8 +102,9 @@ If `metadata.yaml` sits one level down inside a wrapper directory, the entrypoin
 Add `nocan` to replay images only.
 That is how you tell a perception fault from a planning one, because it takes odometry and the grid out of the picture.
 
-Measured 29.8 FPS on `/road_mask`, losing roughly 0.4% of frames in DDS delivery.
-Do not lower `bag_rate` to remove those gaps.
+Measured 29.8 FPS on `/road_mask`, with no frame loss.
+The source node does report frame gaps during replay, but they are in the recording rather than in our delivery: reading `bag_20261006_125333` directly found 43 absent counters and 43 repeated ones, with zero backward jumps, and repeated clean replays reproduce that list exactly.
+Do not lower `bag_rate` to silence those warnings.
 Replaying below real time scales the dead-reckoned ego motion by 1/rate and stretches the BEV grid by the same factor, with nothing warning you, because both the odometry and the grid decay measure time by the wall clock rather than by the recorded stamps.
 See item 1.9 in `OPEN-ITEMS.md`.
 

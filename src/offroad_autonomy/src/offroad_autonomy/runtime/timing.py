@@ -43,7 +43,11 @@ DISPLAY_STAGES = (
 
 @dataclass(frozen=True)
 class StageStats:
+    #: p50 is carried separately from the mean because a latency distribution
+    #: has a tail: the mean sits above the median and reporting one as the
+    #: other overstates typical latency.
     mean_ms: float = 0.0
+    p50_ms: float = 0.0
     p95_ms: float = 0.0
     last_ms: float = 0.0
     count: int = 0
@@ -99,6 +103,7 @@ class RuntimeStats:
             values = np.fromiter(samples, dtype=np.float64)
         return StageStats(
             mean_ms=float(values.mean()),
+            p50_ms=float(np.percentile(values, 50)),
             p95_ms=float(np.percentile(values, 95)),
             last_ms=float(values[-1]),
             count=int(values.size),
@@ -115,6 +120,6 @@ class RuntimeStats:
 
     def format_lines(self, order: tuple[str, ...] = ()) -> list[str]:
         return [
-            f"{name:<16} mean {s.mean_ms:6.1f} ms   p95 {s.p95_ms:6.1f} ms"
+            f"{name:<16} p50 {s.p50_ms:6.1f} ms   p95 {s.p95_ms:6.1f} ms"
             for name, s in self.summary(order).items()
         ]

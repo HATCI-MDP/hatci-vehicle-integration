@@ -6,13 +6,16 @@ gate reads attached to the mask it belongs to, without a custom message
 package.
 """
 
+import time
 from dataclasses import replace
 
 import numpy as np
+from offroad_autonomy.runtime.timing import RuntimeStats
 from offroad_autonomy.types import PipelineConfig
 from offroad_autonomy.utils.config import load_config
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.time import Time
 
 from perception_suite import settings
 
@@ -40,6 +43,81 @@ EXTERNAL_LATEST = QoSProfile(
     history=HistoryPolicy.KEEP_LAST,
     depth=1,
 )
+
+
+#: Beyond this, the stamp is not on our clock, so the difference is not latency.
+_MAX_PLAUSIBLE_AGE_S = 10.0
+
+#: Five seconds rather than one. Four stages reporting every second drowns the
+#: entrypoint's own output, and nothing here changes fast enough to need it.
+_REPORT_PERIOD_S = 5.0
+
+
+class StageTimer:
+    """Per-stage timing for one pipeline node, logged periodically.
+
+    Two numbers, because they answer different questions.
+
+    ``work``
+        How long this node's own callback took. Always meaningful.
+
+    ``age``
+        How old the frame was by the time this node finished with it,
+        measured from the capture stamp that every stage copies forward.
+        Subtracting one stage's age from the next gives that stage's whole
+        contribution, transport included, which is the thing a single
+        end-to-end number cannot tell you.
+
+    ``age`` only means something when the stamp came from this clock. Under
+    bag replay it is the bag's recorded time, hours in the past, so
+    implausible values are dropped and the reason is said once rather than
+    reported as latency.
+    """
+
+    def __init__(self, node: Node, stage: str) -> None:
+        self._node = node
+        self._stage = stage
+        self._stats = RuntimeStats()
+        self._warned_clock = False
+        node.create_timer(_REPORT_PERIOD_S, self._report)
+
+    @staticmethod
+    def start() -> float:
+        return time.perf_counter()
+
+    def done(self, t0: float, header, extra: dict[str, float] | None = None) -> None:
+        self._stats.tick()
+        self._stats.record('work', (time.perf_counter() - t0) * 1000.0)
+        if extra:
+            self._stats.record_many(extra)
+
+        elapsed = self._node.get_clock().now() - Time.from_msg(header.stamp)
+        age_s = elapsed.nanoseconds / 1e9
+        if 0.0 <= age_s <= _MAX_PLAUSIBLE_AGE_S:
+            self._stats.record('age', age_s * 1000.0)
+            return
+        if not self._warned_clock:
+            self._warned_clock = True
+            self._node.get_logger().info(
+                f'{self._stage}: capture stamps are not on this clock '
+                f'(first sample {age_s:.1f}s), which is normal for bag replay. '
+                'Reporting work time only.')
+
+    def _report(self) -> None:
+        work = self._stats.stage('work')
+        if work.count == 0:
+            return
+        parts = [f'{self._stage} {self._stats.fps():5.1f} Hz',
+                 f'work p50 {work.p50_ms:5.1f} p95 {work.p95_ms:5.1f} ms']
+        for name in self._stats.stages():
+            if name in ('work', 'age'):
+                continue
+            extra = self._stats.stage(name)
+            parts.append(f'{name} p50 {extra.p50_ms:5.1f} ms')
+        age = self._stats.stage('age')
+        if age.count > 0:
+            parts.append(f'age p50 {age.p50_ms:5.1f} p95 {age.p95_ms:5.1f} ms')
+        self._node.get_logger().info('stage timing | ' + ' | '.join(parts))
 
 
 def load_pipeline_config(node: Node) -> PipelineConfig:

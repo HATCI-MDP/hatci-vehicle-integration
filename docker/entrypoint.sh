@@ -25,8 +25,8 @@
 #                                 cannot replace it: bag replay now reaches
 #                                 about 30 FPS, but its rate is set by the
 #                                 replayer and the H.264 decoder rather than by
-#                                 the pipeline, and it drops roughly 0.4% of
-#                                 frames getting there.
+#                                 the pipeline, so its number says less about
+#                                 what the stages can actually sustain.
 #
 # Also:
 #   selftest                      mode 5, headless, with a pass/fail exit code

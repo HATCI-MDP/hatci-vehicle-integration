@@ -6,7 +6,7 @@ This runs the configuration **26s segmentation under the BEV grid planner**.
 Nothing is installed on the host and nothing is read from the host filesystem: `docker load` the tarball and run it.
 
 **Read `OPEN-ITEMS.md` alongside this.**
-One part of the live path is still incomplete and it is listed there, with everything else we need confirmed.
+The live path works but has never run against a real vehicle bus; what we need confirmed is listed there.
 
 ---
 
@@ -34,7 +34,7 @@ Any ros2 launch argument is appended and wins: `./run_vehicle.sh clip1 can plann
 The grid needs ego motion to register one frame against the next, so the two belong to the same switch.
 Mode 2 is the exception: a bag carries its own `/CAN`, so replay turns the grid on by itself, and `nocan` is how you turn it back off.
 
-Measured on our bench Jetson, all six configurations, zero frame gaps except where noted:
+Measured on our bench Jetson, all six configurations:
 
 | Mode | `/road_mask` | `/path` | `/odom` |
 |---|---|---|---|
@@ -45,8 +45,9 @@ Measured on our bench Jetson, all six configurations, zero frame gaps except whe
 | 4. `camera can` | 30.0 | 30.0 | - |
 | 5. `clip1 can` | 30.1 | 30.1 | 30.3 |
 
-Mode 2 drops roughly 0.4% of frames in DDS delivery, which the source node reports as frame gaps.
-Do not lower `bag_rate` to remove them: replaying below real time scales the dead-reckoned ego motion by 1/rate and stretches the BEV grid by the same factor, silently, because the odometry and the grid decay both measure time by the wall clock rather than by the recorded stamps.
+Mode 2 loses no frames.
+The source node does report frame gaps while replaying, but those belong to the recording: a direct scan of `bag_20261006_125333`, with no pipeline involved, found 43 absent counters and 43 repeated ones and zero backward jumps, and three consecutive replays reproduced the same list byte for byte.
+Do not lower `bag_rate` to silence them: replaying below real time scales the dead-reckoned ego motion by 1/rate and stretches the BEV grid by the same factor, silently, because the odometry and the grid decay both measure time by the wall clock rather than by the recorded stamps.
 Item 1.9 in `OPEN-ITEMS.md` is the question that would let us fix that properly.
 
 Mode 4 shows no `/odom` above because there is no vehicle bus on the bench.
@@ -113,13 +114,13 @@ See item 2.1.
 **Only 26s should be deployed.**
 The two VOS-trained variants are present for completeness but reject their own perception 5 to 11 times more often than the originals, and should not be considered until R2 scores their segmentation accuracy.
 
-## 3. The one incomplete part: live CAN odometry
+## 3. Live CAN odometry
 
 The BEV grid planner needs ego motion.
 In the lab that came from `odom_node.py`, which replays a CSV extracted from the bags, one row per published frame.
-There is no live odometry source anywhere in the stack: a grep for `socketcan`, `python-can`, `cantools` and `can0` across the whole of `perception_suite` returns nothing, and `run_demo.sh` enforced it outright with `'camera' has no recorded CAN; 'can' only works with a bag`.
+Before this image there was no live odometry source anywhere in the stack: a grep for `socketcan`, `python-can`, `cantools` and `can0` across the whole of `perception_suite` returned nothing, and `run_demo.sh` enforced it outright with `'camera' has no recorded CAN; 'can' only works with a bag`.
 
-So the reported configuration has only ever run against recorded odometry.
+Every number we have reported still comes from recorded odometry, because the benchmark matrix was run in mode 5.
 
 `perception_suite/live_odom_node.py` in this image closes that gap.
 It subscribes to the vehicle's CAN topic rather than reading raw bus frames, which is the right shape for the setup: the signals arrive decoded, so no DBC file and no raw-bus reader are needed.
@@ -148,14 +149,15 @@ Publishing on CAN arrival would also give the planner two updates for one frame,
 Absolute drift does not matter, because the grid only ever compares consecutive poses and decays anything older than `memory_s`.
 The offline integration was validated against the bags' own GPS at 0.6 to 1.3 percent of path length over roughly 2 km, with median position error 0.3 to 0.6 m over the 1 to 2 s the grid actually remembers.
 
-**What is still needed** is the `ads_messages` package inside the image, so the node can resolve `ads_messages/msg/CANMsg` and subscribe at all.
-The full `.msg` text, including every nested type, is embedded in the bag files, which is how `extract_can.py` decodes them with no package installed.
-So we can reconstruct it ourselves; your own copy is preferable only because it removes the risk that your current schema has drifted from the October bags.
+**What we would still like from you** is your own `ads_messages` package, though it is no longer a dependency.
+The full `.msg` text, including every nested type, is embedded in the bag files, which is how `extract_can.py` decodes them with no package installed, so we reconstructed it from there and it is in this image at `/opt/replay_ws`.
+It is validated against the recorded data, and the entrypoint prefers your package over ours whenever yours is installed.
+Your copy is still worth having for one reason: it removes the risk that your current schema has drifted from the October bags, which is the one thing our reconstruction cannot rule out.
 See section 1 of `OPEN-ITEMS.md`.
 
 The type is resolved at runtime rather than imported, so the module still loads on a board without `ads_messages` and the rest of the pipeline comes up normally.
 It logs why it is quiet instead of taking the launch down.
-Until the package is in place, run the vehicle with `planner_mode:=baseline`, which ignores ego motion entirely.
+If the type on your bus is not `ads_messages/msg/CANMsg`, pass `can_msg_type:=` rather than editing the node.
 
 The node also guards the two mistakes that would otherwise be silent.
 It skips any message with `error` or `spd_error` set or `imu.valid` false, overridable with `trust_flags:=false`, and it warns once if the yaw rate or speed reads past anything a road vehicle does, which is what a deg/s or km/h mix-up looks like.
@@ -203,12 +205,13 @@ The frame-rate requirement passes either way, so pinning is headroom rather than
 
 Honest list, so nothing is discovered on your board.
 
-1. **The CAN message definition is not in the image yet.** Live odometry publishes nothing until it is, because the node cannot resolve the `/CAN` type without it. HATCI are supplying the package; we have also confirmed we can reconstruct it from the schema embedded in the bags if needed. No longer a blocker, but still a step.
-2. **Camera height and pitch are guesses.** 1.5 m and 0.0 degrees. Items 3.1, 3.2.
-3. **The live camera path is tested on our carrier, not yours.** `camera_index:=0` is our Neousys carrier's GMSL capture, and the full pipeline runs live off it at 30 FPS. What is still open is the interface and connector your camera uses, which is item 5.1. Note also that this hardware does not hot-plug, so the camera has to be attached before the board is powered on; item 5.4 has the detail.
-4. **Nothing detects missing odometry.** `5_planner_node` marks every odometry message it receives as valid. Our node goes silent rather than publishing a stale pose, which makes the grid forget, but a vehicle probably wants the planner to hold or hand back control. Item 1.8.
-5. **`/command` is a `Float32MultiArray` with no header.** Needs a real typed interface and something to subscribe to it. Item 4.1.
-6. **The image is 34 GB.** It carries all four models at two input sizes each and three 300 MB demo clips. Trimming to 26s only and one clip would cut it substantially; worth doing once the configuration is locked.
+1. **Live CAN odometry has never run against a real vehicle bus.** It runs: mode 4 holds 30 FPS with `live_odom_node` subscribed to `/CAN`. But the publisher it has been tested against was `ros2 bag play` feeding one of your October bags, which reproduces the recorded type, QoS, rate and field layout and nothing beyond that. If your live bus differs in any of those, this is where it shows. Section 1.
+2. **Replaying a bag below real time silently distorts the odometry.** `live_odom_node` integrates dead reckoning on wall-clock arrival time and the BEV grid decays on wall-clock too, neither of which reads the recorded stamps, so at `bag_rate:=r` the ego motion is scaled by 1/r and the grid stretches by the same factor with no warning. The default is 1.0, where it is correct, and the launch argument says not to lower it. It does not affect a live vehicle, where the two clocks agree. Item 1.9.
+3. **Camera height and pitch are guesses.** 1.5 m and 0.0 degrees. Items 3.1, 3.2.
+4. **The live camera path is tested on our carrier, not yours.** `camera_index:=0` is our Neousys carrier's GMSL capture, and the full pipeline runs live off it at 30 FPS. What is still open is the interface and connector your camera uses, which is item 5.1. Note also that this hardware does not hot-plug, so the camera has to be attached before the board is powered on; item 5.4 has the detail.
+5. **Nothing detects missing odometry.** `5_planner_node` marks every odometry message it receives as valid. Our node goes silent rather than publishing a stale pose, which makes the grid forget, but a vehicle probably wants the planner to hold or hand back control. Item 1.8.
+6. **`/command` is a `Float32MultiArray` with no header.** Needs a real typed interface and something to subscribe to it. Item 4.1.
+7. **The image is 34 GB.** It carries all four models at two input sizes each and three 300 MB demo clips. Trimming to 26s only and one clip would cut it substantially; worth doing once the configuration is locked.
 
 ## 7. Rebuilding
 

@@ -53,9 +53,9 @@ replayed at 1.0:
 
 Whole mode-2 pipeline, all four bag topics replayed including /CAN, appsink:
 
-    rate 0.5    road_mask 14.6, odom 15.1, CAN 15.0,  0 frame gaps
-    rate 0.8    road_mask 24.4, odom 24.0, CAN 24.0,  2 frame gaps
-    rate 1.0    road_mask 29.8, odom 30.3, CAN 30.0,  6 frame gaps
+    rate 0.5    road_mask 14.6, odom 15.1, CAN 15.0
+    rate 0.8    road_mask 24.4, odom 24.0, CAN 24.0
+    rate 1.0    road_mask 29.8, odom 30.3, CAN 30.0
 
 Read that table for throughput only. The lower rates are NOT better runs; see
 "bag_rate defaults to 1.0" below.
@@ -63,11 +63,31 @@ Read that table for throughput only. The lower rates are NOT better runs; see
 Same pipeline on the subprocess backend reached about 10 FPS, so appsink is
 roughly a 3x improvement and full 30 FPS replay is now reachable.
 
-The gaps are in DDS delivery rather than in decoding: the replayer publishes
-KEEP_LAST, so when our executor is momentarily busy the writer overwrites its
-history instead of waiting. Closing that would mean a multi-threaded executor,
-which is real work with its own risks, and mode 2 exists to prove the stages
-run on real recorded data rather than to produce a frame-rate figure.
+This node loses no frames
+-------------------------
+An earlier version of this file carried a frame-gap column in the table above,
+rising with the replay rate, and explained it as DDS delivery loss. That was
+wrong on both counts.
+
+Reading bag_20261006_125333 directly, with no pipeline and no DDS involved:
+
+    7990 messages, counters 2423..10412
+    43 counters absent, 43 counters repeated, 0 backward jumps
+
+The two cancel, which is why the counter span equals the message count and why
+summing net frames lost returns exactly zero. The first eight anomalies the
+scan printed are the ones the pipeline reports, in the same order, and three
+consecutive 115 s replays at rate 1.0 produced md5-identical gap lists.
+Identical bytes in, identical irregularities out.
+
+The apparent correlation with bag_rate was coverage, not loss. The first
+anomaly sits at counter 3602, about 15% into the recording, so a short run at
+0.5 never reached one. A faster run covers more of the bag in the same
+wall-clock window and meets more of the recording's own defects.
+
+_check_continuity therefore reports what the SOURCE delivered, not what we
+lost. Treat a warning from it as a property of the recording unless you have
+specific reason to think otherwise.
 
 bag_rate defaults to 1.0 and should stay there
 ----------------------------------------------
@@ -91,9 +111,9 @@ grid is stretched 2x along the direction of travel, and curvature therefore
 reads as half what it is. The arc chosen off that grid is chosen from wrong
 geometry. Nothing warns you, which is what makes it worse than the frame loss.
 
-So 1.0 is the only rate at which mode 2 is geometrically correct, and the
-roughly 0.4% of frames it loses is the cheaper of the two errors. Do not lower
-bag_rate to silence the frame-gap warnings.
+So 1.0 is the only rate at which mode 2 is geometrically correct, and it costs
+nothing, because there is no frame loss to trade against it. Do not lower
+bag_rate to silence the frame-gap warnings: those gaps are the recording's.
 
 The real fix is to integrate on msg.header.stamp instead of the wall clock,
 which would make the replay path rate-independent. It is not done here because
@@ -216,6 +236,7 @@ class BagPublisher(Node):
         self.seen_idr = False
         self.last_counter = None
         self.gaps = 0
+        self.repeats = 0
         self.decoded = 0
 
         if backend == "auto":
@@ -474,16 +495,40 @@ class BagPublisher(Node):
                     "than dropping a frame.", once=True)
 
     def _check_continuity(self, frame_id):
-        """The counter in frame_id is the only way to see a lost frame."""
+        """Report what the source delivered. This is NOT a measure of our loss.
+
+        Scanning bag_20261006_125333 directly found 43 absent counters and 43
+        repeated ones already in the recording, with zero backward jumps, and
+        clean replays reproduce that list exactly. See the module docstring.
+        A skip and a repeat are different events and only one of them costs a
+        frame, so they are counted and worded separately.
+        """
         try:
             counter = int(frame_id.rsplit("_", 1)[1])
         except (ValueError, IndexError, AttributeError):
             return
-        if self.last_counter is not None and counter != self.last_counter + 1:
-            self.gaps += 1
-            self.get_logger().warn(
-                f"Frame gap: {self.last_counter} -> {counter}. Expect visual "
-                f"corruption until the next keyframe. ({self.gaps} so far)")
+        last = self.last_counter
+        if last is not None and counter != last + 1:
+            if counter == last:
+                # The same frame twice. Wasteful, never corrupting.
+                self.repeats += 1
+                self.get_logger().warn(
+                    f"Source repeated frame counter {counter}. Nothing lost. "
+                    f"({self.repeats} repeats so far)")
+            elif counter < last:
+                # Not seen in our bags. Usually two publishers on one topic.
+                self.gaps += 1
+                self.get_logger().warn(
+                    f"Frame counter went backwards: {last} -> {counter}. "
+                    f"Check for a second publisher on this topic. "
+                    f"({self.gaps} skips so far)")
+            else:
+                missing = counter - last - 1
+                self.get_logger().warn(
+                    f"Source skipped {missing} frame(s): {last} -> {counter}. "
+                    f"If any were P-frames, expect visual corruption until the "
+                    f"next keyframe. ({self.gaps + 1} skips so far)")
+                self.gaps += 1
         self.last_counter = counter
 
     # -- teardown -----------------------------------------------------------

@@ -272,13 +272,18 @@ class LiveOdomNode(Node):
         if not fresh:
             # Deliberately publishing nothing rather than a stale pose.
             #
-            # OPEN QUESTION FOR HATCI - see QUESTIONS.md. Nothing downstream
-            # currently detects missing odometry: 5_planner_node sets
-            # VehicleState.valid=True on every message it receives, so a stale
-            # pose would be consumed as if it were current. Staying silent
-            # makes the grid fall back to forgetting, which is the conservative
-            # failure. A real vehicle probably wants the planner to hold or
-            # hand back control instead, and that is a decision above this node.
+            # OPEN QUESTION FOR HATCI - see item 1.8 in OPEN-ITEMS.md.
+            #
+            # Silence is NOT on its own a safe fallback, and an earlier version
+            # of this comment claimed it was. 5_planner_node latches: on_odom
+            # stores the pose with valid=True and nothing expires it, so when
+            # this node goes quiet the planner keeps planning from the last
+            # pose it received. The vehicle is still moving, so new masks land
+            # in cells it has already left and the grid corrupts rather than
+            # empties. Returning here is necessary but not sufficient;
+            # something downstream has to notice. A real vehicle probably wants
+            # the planner to hold or hand back control, and that is a decision
+            # above this node.
             return
 
         o = Odometry()

@@ -12,7 +12,7 @@ from offroad_autonomy.perception.road_segmenter import RoadSegmenter
 from offroad_autonomy.types import FramePacket
 
 from perception_suite import engine, settings
-from perception_suite.common import LATEST_ONLY, encode_mask, load_pipeline_config
+from perception_suite.common import LATEST_ONLY, StageTimer, encode_mask, load_pipeline_config
 
 
 class SegmentationNode(Node):
@@ -51,6 +51,7 @@ class SegmentationNode(Node):
         self.valid_roi = PerceptionView(config).valid_roi
         self.segmenter = RoadSegmenter(config)
         self.bridge = CvBridge()
+        self.stage_timer = StageTimer(self, 'segmentation')
         self.publisher = self.create_publisher(Image, 'road_mask', 10)
         # The frames actually segmented, for the visualizer: matching against
         # /preprocessed_frames would only work while segmentation keeps up.
@@ -74,6 +75,7 @@ class SegmentationNode(Node):
         return path
 
     def on_frame(self, msg):
+        t0 = self.stage_timer.start()
         image = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
         h, w = image.shape[:2]
         frame = FramePacket(
@@ -87,6 +89,10 @@ class SegmentationNode(Node):
         out.header = msg.header
         self.publisher.publish(out)
         self.frame_publisher.publish(msg)
+        # The model's own forward pass, separately from everything this node
+        # does around it, because that is the number worth optimising.
+        self.stage_timer.done(
+            t0, msg.header, {'inference': float(result.inference_time_ms)})
 
 
 def main(args=None):

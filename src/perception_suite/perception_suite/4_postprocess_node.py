@@ -9,7 +9,8 @@ from offroad_autonomy.perception.perception_view import PerceptionView
 from offroad_autonomy.postprocessing.temporal_stabilizer import TemporalStabilizer
 from offroad_autonomy.types import PerceptionResult
 
-from perception_suite.common import LATEST_ONLY, decode_mask, encode_mask, load_pipeline_config
+from perception_suite.common import (
+    LATEST_ONLY, StageTimer, decode_mask, encode_mask, load_pipeline_config)
 
 
 class PostprocessNode(Node):
@@ -21,11 +22,13 @@ class PostprocessNode(Node):
         self.valid_roi = PerceptionView(config).valid_roi
         self.stabilizer = TemporalStabilizer(config)
         self.bridge = CvBridge()
+        self.stage_timer = StageTimer(self, 'postprocess')
         self.publisher = self.create_publisher(Image, 'stabilized_mask', 10)
         self.subscription = self.create_subscription(
             Image, 'road_mask', self.on_mask, LATEST_ONLY)
 
     def on_mask(self, msg):
+        t0 = self.stage_timer.start()
         mask, confidence = decode_mask(self.bridge.imgmsg_to_cv2(msg, 'mono8'))
         perception = PerceptionResult(
             mask=mask, confidences=[confidence], valid_roi=self.valid_roi)
@@ -35,6 +38,7 @@ class PostprocessNode(Node):
         out = self.bridge.cv2_to_imgmsg(encode_mask(stabilized.mask, confidence), 'mono8')
         out.header = msg.header
         self.publisher.publish(out)
+        self.stage_timer.done(t0, msg.header)
 
 
 def main(args=None):

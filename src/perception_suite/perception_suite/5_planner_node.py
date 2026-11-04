@@ -13,7 +13,7 @@ from offroad_autonomy.perception.perception_view import PerceptionView
 from offroad_autonomy.planning.centerline_planner import CenterlinePlanner
 from offroad_autonomy.types import PerceptionResult, StabilizedResult, VehicleState
 
-from perception_suite.common import LATEST_ONLY, decode_mask, load_pipeline_config
+from perception_suite.common import LATEST_ONLY, StageTimer, decode_mask, load_pipeline_config
 
 
 class PlannerNode(Node):
@@ -47,6 +47,7 @@ class PlannerNode(Node):
         # Origin on the ground below the camera, x forward and y left (REP 103).
         self.frame_id = self.declare_parameter('frame_id', 'base_link').value
         self.bridge = CvBridge()
+        self.stage_timer = StageTimer(self, 'planner')
         self.publisher = self.create_publisher(Path, 'path', 10)
         self.subscription = self.create_subscription(
             Image, 'stabilized_mask', self.on_mask, LATEST_ONLY)
@@ -68,6 +69,7 @@ class PlannerNode(Node):
             valid=True)
 
     def on_mask(self, msg):
+        t0 = self.stage_timer.start()
         mask, confidence = decode_mask(self.bridge.imgmsg_to_cv2(msg, 'mono8'))
         stabilized = StabilizedResult(
             mask=mask,
@@ -93,6 +95,7 @@ class PlannerNode(Node):
                 pose.pose.orientation.w = 1.0
                 path.poses.append(pose)
         self.publisher.publish(path)
+        self.stage_timer.done(t0, msg.header)
 
 
 def main(args=None):

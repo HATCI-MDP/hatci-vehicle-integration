@@ -183,7 +183,8 @@ def generate_launch_description():
         DeclareLaunchArgument('bag_rate', default_value='1.0',
                               description='Replay speed for source:=bag. LEAVE IT\n'
                                           'AT 1.0. Lowering it is tempting, because\n'
-                                          'it removes the frame gaps below, but it\n'
+                                          'it silences the frame-gap warnings,\n'
+                                          'but it\n'
                                           'breaks the odometry: live_odom_node\n'
                                           'integrates dead reckoning on wall-clock\n'
                                           'arrival time, and the BEV grid decays on\n'
@@ -193,11 +194,12 @@ def generate_launch_description():
                                           'vehicle appears to travel twice as far\n'
                                           'as it did and curvature reads half what\n'
                                           'it is. Nothing warns you.\n'
-                                          'The cost of 1.0 is about 6 counter gaps\n'
-                                          'in 52 s on this board, roughly 0.4% of\n'
-                                          'frames, lost in DDS delivery because the\n'
-                                          'player publishes KEEP_LAST. A stretched\n'
-                                          'map is the worse of the two.'),
+                                          '1.0 costs nothing. We lose no frames.\n'
+                                          'The gaps the source node reports are\n'
+                                          'already in the recording: 43 absent and\n'
+                                          '43 repeated counters, confirmed by\n'
+                                          'reading the bag directly. See the\n'
+                                          'docstring in 1_bag_node.py.'),
         DeclareLaunchArgument('image_topic',
                               default_value='/image_processing/image_compressed',
                               description='Compressed H.264 topic for source:=bag'),

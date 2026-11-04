@@ -1,6 +1,6 @@
 # HATCI off-road perception stack: containerized handoff
 
-Image tag `hatci-vehicle:draft4`, 34.1 GB on disk.
+Image tag `hatci-vehicle:draft6`, 34.1 GB on disk.
 
 This runs the configuration **26s segmentation under the BEV grid planner**.
 Nothing is installed on the host and nothing is read from the host filesystem: `docker load` the tarball and run it.
@@ -53,7 +53,7 @@ Item 1.9 in `OPEN-ITEMS.md` is the question that would let us fix that properly.
 Mode 4 shows no `/odom` above because there is no vehicle bus on the bench.
 It has been validated against a `/CAN` publisher fed from your bags, never against a real bus.
 
-**Three things worth knowing before any of this touches a vehicle.**
+**Four things worth knowing before any of this touches a vehicle.**
 
 Run `selftest` first on any new board.
 It brings the pipeline up headless, waits the 45 s the engine needs to deserialize and warm up, then measures `/road_mask` and `/path` and exits non-zero if either is dead.
@@ -67,19 +67,35 @@ Replaying a bag's `/CAN` needs the `ads_messages` definitions.
 The image carries our reconstruction of them in a separate overlay at `/opt/replay_ws`, and prefers your package if yours is installed.
 The entrypoint prints which one it used.
 
+Every stage reports its own timing.
+Each processing node logs one line every 5 s: its rate, the p50 and p95 of its own callback, and how old the frame was when it finished with it.
+`age` is measured from the capture stamp every stage copies forward, so the difference between two stages' ages is the whole cost of the later one, transport included, which is what a single end-to-end number cannot tell you.
+Under bag replay the stamps are the recording's rather than this clock, so the node says so once and reports work time only.
+Measured in this image on mode 5 with the dashboard running as load:
+
+```
+preprocess    30.0 Hz | work p50  1.2 p95  2.3 ms |                        age p50  3.6 ms
+segmentation  30.0 Hz | work p50 19.0 p95 25.9 ms | inference p50 10.1 ms | age p50 33.4 ms
+postprocess   29.4 Hz | work p50  4.7 p95  8.4 ms |                        age p50 38.4 ms
+planner       29.2 Hz | work p50 14.5 p95 20.4 ms |                        age p50 53.7 ms
+```
+
+So the planner is acting on frames about 54 ms old with the dashboard on, and 38 ms without it.
+Half the segmentation node is not the model: 19.0 ms of work around a 10.1 ms forward pass, the rest being `cv_bridge` conversion in and mask encoding out.
+
 Verified on our bench Jetson (L4T R36.3.0, JetPack 6.0):
 
 ```
 entrypoint: CAN odometry from bag_20261006_125333.csv, BEV grid planner
 entrypoint: 7987 frames, 7998 CAN rows (0.1% apart)
 === selftest: 26s + BEV grid on clip1, headless ===
-ok: /road_mask average rate: 30.385
-ok: /path      average rate: 28.979
+ok: /road_mask average rate: 30.353
+ok: /path      average rate: 30.401
 === selftest PASSED ===
 ```
 
 Those rates are a **liveness check, not a benchmark**.
-This particular run shared the GPU with another container, and the dashboard was off while the reported numbers were all measured with it running as load.
+The dashboard was off for this run, and the reported numbers were all measured with it running as load.
 The frame-rate evidence is the 40-run matrix in the R1 bundle: 283,477 frames across 9,578 one-second windows, none below 20 FPS.
 What the selftest proves is narrower and is the thing worth proving on a new board: the image is self-contained, the TensorRT engine deserializes, CUDA works, and the full six-node graph reaches the planner.
 
@@ -209,18 +225,19 @@ Honest list, so nothing is discovered on your board.
 2. **Replaying a bag below real time silently distorts the odometry.** `live_odom_node` integrates dead reckoning on wall-clock arrival time and the BEV grid decays on wall-clock too, neither of which reads the recorded stamps, so at `bag_rate:=r` the ego motion is scaled by 1/r and the grid stretches by the same factor with no warning. The default is 1.0, where it is correct, and the launch argument says not to lower it. It does not affect a live vehicle, where the two clocks agree. Item 1.9.
 3. **Camera height and pitch are guesses.** 1.5 m and 0.0 degrees. Items 3.1, 3.2.
 4. **The live camera path is tested on our carrier, not yours.** `camera_index:=0` is our Neousys carrier's GMSL capture, and the full pipeline runs live off it at 30 FPS. What is still open is the interface and connector your camera uses, which is item 5.1. Note also that this hardware does not hot-plug, so the camera has to be attached before the board is powered on; item 5.4 has the detail.
-5. **Nothing detects missing odometry.** `5_planner_node` marks every odometry message it receives as valid. Our node goes silent rather than publishing a stale pose, which makes the grid forget, but a vehicle probably wants the planner to hold or hand back control. Item 1.8.
+5. **Nothing detects missing odometry, and that failure corrupts the grid rather than clearing it.** `5_planner_node` latches: `on_odom` stores the pose with `valid=True` and nothing ever expires it, and the file contains no reference to time at all. Our node goes silent rather than publishing a stale pose, but silence is not on its own a safe fallback: the planner keeps planning from the last pose it received while the vehicle keeps moving, so new masks are stamped into cells it has already left and observations from different real positions pile into the same ones. An earlier version of this item said the grid falls back to forgetting and called that the conservative failure; it was wrong on both counts. Our node going quiet is necessary but not sufficient, and something downstream has to notice. Item 1.8.
 6. **`/command` is a `Float32MultiArray` with no header.** Needs a real typed interface and something to subscribe to it. Item 4.1.
 7. **The image is 34 GB.** It carries all four models at two input sizes each and three 300 MB demo clips. Trimming to 26s only and one clip would cut it substantially; worth doing once the configuration is locked.
 
 ## 7. Rebuilding
 
 ```bash
-TAG=hatci-vehicle:draft5 ./build.sh   # on a board that has hatci-pipeline:v1
+TAG=hatci-vehicle:draft7 ./build.sh   # on a board that has hatci-pipeline:v1
 ```
 
-The default tag is `hatci-vehicle:draft4`, and `build.sh` refuses to overwrite a tag that already exists.
-That is deliberate: `draft4` is the image every number here was measured in, and rebuilding over it would replace a verified artifact with an unverified one of the same name.
+The default tag is `hatci-vehicle:draft6`, and `build.sh` refuses to overwrite a tag that already exists.
+That is deliberate: rebuilding over a tag would replace a verified artifact with an unverified one of the same name, and nothing downstream could tell the difference.
+`draft6` was built from commit `6fcf840` and passes its selftest at 30.4 FPS on both `/road_mask` and `/path`.
 Pass a new `TAG`, or `FORCE=1` to overwrite on purpose.
 
 `build.sh` stages the context from two places.
@@ -231,9 +248,9 @@ It writes to no source tree, and it prints the commit it built from and warns wh
 Delivering it:
 
 ```bash
-docker save hatci-vehicle:draft4 | pigz -p 6 > hatci-vehicle-draft4.tar.gz
+docker save hatci-vehicle:draft6 | pigz -p 6 > hatci-vehicle-draft6.tar.gz
 # on your board
-pigz -dc hatci-vehicle-draft4.tar.gz | docker load     # or gunzip -c
+pigz -dc hatci-vehicle-draft6.tar.gz | docker load     # or gunzip -c
 ```
 
 This is the tarball route rather than a Dockerfile build, so you need no network access and no NGC login, and you get bit-for-bit the image we benchmarked.
@@ -242,15 +259,15 @@ The built artifact, verified:
 
 | | |
 |---|---|
-| file | `hatci-vehicle-draft4.tar.gz` |
+| file | `hatci-vehicle-draft6.tar.gz` |
 | compressed | 12 GB (from 34.1 GB on disk) |
-| sha256 | `1f8672af83ff6c4a0b478fe766af77ef970e0c5d7a9da3c71d92c386c9b28667` |
+| sha256 | `96a6953933d791dffa199712b39befa6124f912a1b50cc764f7ca9782d68a8e2` |
 | checked | `pigz -t` clean; valid OCI archive (`index.json`, `manifest.json`, `oci-layout`, 65 entries) |
 
 Verify the checksum after transfer before loading:
 
 ```bash
-sha256sum -c <<< "1f8672af83ff6c4a0b478fe766af77ef970e0c5d7a9da3c71d92c386c9b28667  hatci-vehicle-draft4.tar.gz"
+sha256sum -c <<< "96a6953933d791dffa199712b39befa6124f912a1b50cc764f7ca9782d68a8e2  hatci-vehicle-draft6.tar.gz"
 ```
 
 Loading needs roughly 34 GB free on your board on top of the 12 GB archive.

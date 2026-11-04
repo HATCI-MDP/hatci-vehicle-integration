@@ -16,19 +16,19 @@ set -eo pipefail
 REPO="${REPO:-/home/nvidia/hatci-vehicle-integration}"
 BENCH="${BENCH:-/home/nvidia/bench-ros}"
 CTX="${CTX:-/home/nvidia/handoff/ctx}"
-TAG="${TAG:-hatci-vehicle:draft4}"
+TAG="${TAG:-hatci-vehicle:draft6}"
 
 for d in "$REPO/src/perception_suite" "$REPO/src/offroad_autonomy" "$BENCH/models"; do
   [ -d "$d" ] || { echo "build: missing $d" >&2; exit 1; }
 done
 
-# draft4 is the image every number in README.md was measured in. Rebuilding
+# draft6 is the image every number in README.md was measured in. Rebuilding
 # over that tag would replace a verified artifact with an unverified one of the
 # same name, and nothing downstream could tell the difference, so refuse unless
 # asked twice.
 if docker image inspect "$TAG" >/dev/null 2>&1 && [ -z "$FORCE" ]; then
   echo "build: $TAG already exists." >&2
-  echo "build:   TAG=hatci-vehicle:draft5 ./build.sh   build under a new name" >&2
+  echo "build:   TAG=hatci-vehicle:draft7 ./build.sh   build under a new name" >&2
   echo "build:   FORCE=1 ./build.sh                    overwrite it deliberately" >&2
   exit 1
 fi

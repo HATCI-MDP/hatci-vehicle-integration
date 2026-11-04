@@ -3,7 +3,7 @@
 **The pipeline source is in `src/`. The weights, clips and built workspace are in the image.**
 The two packages under `src/` are the readable source: `perception_suite`, the six ROS 2 nodes, and `offroad_autonomy`, the algorithm library they import.
 See `src/README.md` for how they fit together and how to build them.
-The model weights, the demo clips and the prebuilt workspace are baked into `hatci-vehicle-draft4.tar.gz`, which ships separately because it is 12 GB compressed.
+The model weights, the demo clips and the prebuilt workspace are baked into `hatci-vehicle-draft6.tar.gz`, which ships separately because it is 12 GB compressed.
 
 **Read `OPEN-ITEMS.md` first.** It is what we need confirmed, ordered by what it blocks.
 
@@ -23,7 +23,7 @@ The model weights, the demo clips and the prebuilt workspace are baked into `hat
 
 ## Status
 
-`hatci-vehicle:draft4` is built and passing its selftest on our bench Jetson.
+`hatci-vehicle:draft6` is built and passing its selftest on our bench Jetson.
 It runs the reported configuration, 26s segmentation under the BEV grid planner, with nothing installed on the host and nothing read from the host filesystem.
 
 All five run modes below work on that board.
@@ -40,7 +40,7 @@ Load the image once.
 Everything after that is a single command.
 
 ```
-gunzip -c hatci-vehicle-draft4.tar.gz | docker load
+gunzip -c hatci-vehicle-draft6.tar.gz | docker load
 ```
 
 ### Check it works on this board
@@ -208,12 +208,12 @@ Ask us before going down that path, because it is almost certainly not what you 
 | Model weights and TensorRT engines, 395 MB | the engines are serialized against one exact TensorRT build | in the image at `/bench/models` |
 | The three demo clips, 868 MB | footage recorded from your vehicle | in the image at `/bench/data/clips` |
 | The CAN logs | extracted from your October bags; they carry `lat` and `lon` | in the image at `/bench/data/can` |
-| The image itself, 12 GB compressed | too large to send with documentation | `hatci-vehicle-draft4.tar.gz`, delivered separately |
+| The image itself, 12 GB compressed | too large to send with documentation | `hatci-vehicle-draft6.tar.gz`, delivered separately |
 
 To see what is really inside the image without starting the pipeline:
 
 ```
-docker run --rm --entrypoint bash hatci-vehicle:draft4 -lc "ls /bench /opt/ws/src"
+docker run --rm --entrypoint bash hatci-vehicle:draft6 -lc "ls /bench /opt/ws/src"
 ```
 
 ## Two things worth knowing up front

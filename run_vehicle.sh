@@ -19,12 +19,12 @@
 # camera mode.
 set -eo pipefail
 
-IMAGE="${IMAGE:-hatci-vehicle:draft4}"
+IMAGE="${IMAGE:-hatci-vehicle:draft6}"
 MODE="${1:-clip1}"
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
   echo "run_vehicle: image $IMAGE not found. Load it with:" >&2
-  echo "  gunzip -c hatci-vehicle-draft4.tar.gz | docker load" >&2
+  echo "  gunzip -c hatci-vehicle-draft6.tar.gz | docker load" >&2
   exit 1
 fi
 

@@ -35,6 +35,25 @@
 # Any ros2 launch argument is passed straight through and wins, e.g.
 #   ... clip1 can planner_mode:=baseline
 #
+# The two that are off by default and are not modes, because they apply to any
+# mode above:
+#
+#   control:=true                 run 7_controller_node, which turns the plan
+#                                 into steering, throttle and brake on
+#                                 /command. OFF by default: the camera
+#                                 integration test does not need control, and
+#                                 nothing on the vehicle subscribes to /command
+#                                 yet. Add speed_mps:=<m/s> when there is no
+#                                 CAN source, since the controller otherwise
+#                                 has no speed to plan against.
+#   visualize:=true               run 6_visualizer_node, the dashboard, on the
+#                                 host's X display. Needs DISPLAY and the X
+#                                 socket mounted; run_vehicle.sh does both.
+#                                 With control:=true the steering, throttle and
+#                                 brake readouts follow the controller, and
+#                                 they fall back to zero after
+#                                 command_timeout_s with nothing publishing.
+#
 # No "set -u": the ROS setup scripts reference unbound variables.
 set -eo pipefail
 
@@ -175,12 +194,14 @@ case "$MODE" in
   camera)
     # camera_index 0 is the GMSL capture on our bench carrier; the other three
     # channels exist in the device tree but have nothing attached. HATCI's will
-    # differ; override with CAMERA_INDEX=N.
+    # differ; append camera_index:=N. run_vehicle.sh does not forward the
+    # CAMERA_INDEX or ROTATE_180 environment variables into the container.
     #
     # rotate_180 is on because our camera presents inverted. It is NOT a
     # property of the pipeline, it is a property of how this camera is mounted,
     # so check the dashboard before trusting it on different hardware: the road
     # must be at the BOTTOM of the frame or the ground projection is wrong.
+    # Append rotate_180:=false for a camera mounted the right way up.
     #
     # NV16 is not a preference. The device advertises UYVY first and OpenCV's
     # own V4L2 backend mis-decodes every format it offers; only NV16 pulled

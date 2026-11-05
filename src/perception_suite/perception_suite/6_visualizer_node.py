@@ -1,3 +1,12 @@
+"""
+Stage 6: the operator dashboard.
+
+Subscribes to the four display topics, rebuilds the PipelineStepResult that
+orfd's AutonomyDashboard draws from, and shows it in an OpenCV window. Runs
+only with visualize:=true, and is the one stage that is routinely slower than
+its publishers, which is why its QoS depths are deliberately small.
+"""
+
 import os
 import signal
 import sys
@@ -9,7 +18,7 @@ from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.time import Time
 from sensor_msgs.msg import Image
-from nav_msgs.msg import Path
+from nav_msgs.msg import Odometry, Path
 from cv_bridge import CvBridge
 from message_filters import Subscriber, TimeSynchronizer
 import cv2
@@ -29,7 +38,12 @@ from offroad_autonomy.types import (
 )
 from offroad_autonomy.visualization import AutonomyDashboard, DashboardTelemetry
 
-from perception_suite.common import decode_mask, load_pipeline_config
+from perception_suite.common import (
+    MAX_PLAUSIBLE_AGE_S, LATEST_ONLY, decode_mask, load_pipeline_config)
+# The ROS message and the library dataclass are both named ControlCommand. The
+# dashboard draws from the dataclass, so the message is the one renamed here and
+# _command_callback converts between the two.
+from perception_suite_msgs.msg import ControlCommand as ControlCommandMsg
 
 # Same title as orfd-lane-detection's dashboard window.
 WINDOW = "Off-Road Autonomy Dashboard"
@@ -55,14 +69,17 @@ SYNC_QUEUE = 2
 
 
 class VisualizationNode(Node):
-    """Stage 6: orfd's AutonomyDashboard, fed from the stage topics.
+    """
+    Stage 6: orfd's AutonomyDashboard, fed from the stage topics.
 
     The dashboard draws from a PipelineStepResult, so one is rebuilt per frame
-    and the mask and path overlays are drawn by orfd's own code. Vehicle,
-    and control readouts stay at zero, because a video has none of them.
+    and the mask and path overlays are drawn by orfd's own code. The control
+    readouts follow 7_controller_node and the speed readout follows the odometry
+    source, and both fall back to zero when their topic goes quiet.
     """
 
     def __init__(self):
+        """Open the dashboard window and subscribe to the display topics."""
         super().__init__('visualizer_node')
         config = load_pipeline_config(self)
         view = PerceptionView(config)
@@ -113,6 +130,31 @@ class VisualizationNode(Node):
             queue_size=SYNC_QUEUE,
         )
         self.sync.registerCallback(self.display_callback)
+
+        # command is deliberately NOT one of the synchronized inputs above.
+        # 7_controller_node only runs with control:=true, and a
+        # TimeSynchronizer fires only once every input has arrived, so adding
+        # it there would blank the dashboard entirely in the default six-node
+        # graph. Latest-value-wins costs a frame of skew on a dial and risks
+        # nothing in the picture.
+        self._command = ControlCommand()
+        self._command_at = None
+        self.command_timeout_s = float(
+            self.declare_parameter('command_timeout_s', 0.5).value)
+        self.create_subscription(
+            ControlCommandMsg, 'command', self._command_callback, LATEST_ONLY)
+
+        # Speed comes from odometry for the same reason and with the same
+        # treatment. odom_timeout_s is the name 7_controller_node already uses
+        # for this question, and the launch file feeds both from one argument:
+        # "has odometry gone quiet" has one answer, not two.
+        self._speed_mps = 0.0
+        self._speed_at = None
+        self.odom_timeout_s = float(
+            self.declare_parameter('odom_timeout_s', 0.5).value)
+        self.create_subscription(
+            Odometry, 'odom', self._odom_callback, LATEST_ONLY)
+
         # Show something straight away: nothing reaches display_callback until
         # the source has waited source_delay and the segmenter has loaded its
         # model, which is 10-20s of blank screen otherwise.
@@ -123,6 +165,7 @@ class VisualizationNode(Node):
         # "closed"; taking it at face value shuts the dashboard down on its
         # first frame on any such build.
         self._visibility_reliable = False
+        self._warned_clock = False
         splash = np.zeros((360, 640, 3), np.uint8)
         cv2.putText(splash, 'waiting for the pipeline...', (40, 190),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (220, 220, 220), 2)
@@ -135,11 +178,28 @@ class VisualizationNode(Node):
             + ' '.join(f'{i}={name}' for i, name in DEBUG_VIEW_KEYS.items()))
 
     def display_callback(self, frame_msg, raw_mask_msg, mask_msg, path_msg):
+        """Draw one frame, and record its capture-to-display latency."""
         self.stats.tick()
         # Capture to display: the closest ROS analogue of orfd's loop latency.
+        #
+        # Only when the stamp is on this clock. Under bag replay it is the
+        # bag's recorded time, so the subtraction returns the age of the
+        # RECORDING, not of the frame. Unguarded this reported about 2.5 billion ms
+        # on the dashboard, and the far more dangerous failure would have been
+        # recording it as 0: a latency tile reading "0 / 0 ms  Within Budget"
+        # is a plausible screenshot, and a wrong one. StageTimer in common.py
+        # draws the same line for the same reason.
         captured = Time.from_msg(frame_msg.header.stamp)
         latency_ms = (self.get_clock().now() - captured).nanoseconds / 1e6
-        self.stats.record('latency', latency_ms)
+        if 0.0 <= latency_ms <= MAX_PLAUSIBLE_AGE_S * 1000.0:
+            self.stats.record('latency', latency_ms)
+        elif not self._warned_clock:
+            self._warned_clock = True
+            self.get_logger().info(
+                f'visualizer: capture stamps are not on this clock (first '
+                f'sample {latency_ms / 1000.0:.1f}s), which is normal for bag '
+                'replay. Capture-to-display cannot be measured; the dashboard '
+                'will show it as unavailable and report render time only.')
 
         result = self._step_result(frame_msg, raw_mask_msg, mask_msg, path_msg)
         t0 = time.perf_counter()
@@ -159,9 +219,11 @@ class VisualizationNode(Node):
         if self._viz_n % 60 == 0:
             latency = self.stats.stage('latency')
             render = self.stats.stage('dashboard_render')
+            measured = f'capture-to-display p50 {latency.p50_ms:.1f} ms'
+            if not latency.count:
+                measured = 'capture-to-display unavailable (stamps off clock)'
             self.get_logger().info(
-                f'render rate {self.stats.fps():.1f} FPS | '
-                f'capture-to-display p50 {latency.p50_ms:.1f} ms | '
+                f'render rate {self.stats.fps():.1f} FPS | {measured} | '
                 f'render {render.mean_ms:.1f} ms | n={self._viz_n}')
 
         cv2.imshow(WINDOW, canvas)
@@ -178,6 +240,56 @@ class VisualizationNode(Node):
             rclpy.try_shutdown()
             return
         self._handle_key(key)
+
+    def _command_callback(self, msg):
+        """
+        Hold the newest command for the dials, with its arrival time.
+
+        Arrival time rather than the header stamp, because the question a
+        frozen dial raises is whether the controller is still publishing, not
+        how old the frame behind it was.
+        """
+        self._command = ControlCommand(
+            steering=msg.steering,
+            throttle=msg.throttle,
+            brake=msg.brake,
+            parkingbrake=msg.parkingbrake,
+        )
+        self._command_at = self.get_clock().now()
+
+    def _odom_callback(self, msg):
+        """Hold the newest speed for the speedometer, with its arrival time."""
+        self._speed_mps = float(msg.twist.twist.linear.x)
+        self._speed_at = self.get_clock().now()
+
+    def _current_speed_mph(self):
+        """
+        Return the speed in mph, or zero once odometry goes quiet.
+
+        A pipeline run from video with no CAN source never publishes odometry
+        at all, so zero here is the ordinary case rather than a fault.
+        """
+        if self._speed_at is None:
+            return 0.0
+        age_ns = (self.get_clock().now() - self._speed_at).nanoseconds
+        if age_ns > self.odom_timeout_s * 1e9:
+            return 0.0
+        return self._speed_mps * 2.236936
+
+    def _current_command(self):
+        """
+        Zero once the controller stops publishing.
+
+        Holding the last value would leave the dials showing a steering angle
+        that nothing is commanding any more, which reads as live and is not.
+        Zero is also what a graph with no controller shows, so the two agree.
+        """
+        if self._command_at is None:
+            return ControlCommand()
+        age_ns = (self.get_clock().now() - self._command_at).nanoseconds
+        if age_ns > self.command_timeout_s * 1e9:
+            return ControlCommand()
+        return self._command
 
     def _step_result(self, frame_msg, raw_mask_msg, mask_msg, path_msg):
         image = self.bridge.imgmsg_to_cv2(frame_msg, 'bgr8')
@@ -206,12 +318,16 @@ class VisualizationNode(Node):
             perception=perception,
             stabilized=stabilized,
             plan=self._plan(path_msg, h, w),
-            command=ControlCommand(),
+            command=self._current_command(),
         )
 
     def _plan(self, path_msg, h, w):
-        """The planner publishes metres but draws in pixels, so the path is
-        projected back onto the image the planner read."""
+        """
+        Project the published path back into image pixels.
+
+        The planner publishes ground metres, but the dashboard draws on the
+        image the planner read, so the path has to be projected back.
+        """
         roi_top = self.gate.roi_top(h)
         if not path_msg.poses:
             # The planner publishes an empty path only when the gate stops.
@@ -230,6 +346,13 @@ class VisualizationNode(Node):
 
     def _telemetry(self, result):
         latency = self.stats.stage('latency')
+        # NaN, not zero, when nothing measurable has arrived. The dashboard
+        # renders it as "n/a" rather than drawing a number nobody measured.
+        latency_mean = float('nan')
+        latency_p95 = float('nan')
+        if latency.count:
+            latency_mean = latency.mean_ms
+            latency_p95 = latency.p95_ms
         fallback_state = 'NONE'
         if result.plan.fallback_active:
             fallback_state = 'GATE STOP'
@@ -237,16 +360,16 @@ class VisualizationNode(Node):
         if self.timing_overlay:
             lines = ['ROS VISUALIZER'] + self.stats.format_lines(('latency', 'dashboard_render'))
         return DashboardTelemetry(
-            speed_mph=0.0,
-            steering=0.0,
-            throttle=0.0,
-            brake=0.0,
+            speed_mph=self._current_speed_mph(),
+            steering=result.command.steering,
+            throttle=result.command.throttle,
+            brake=result.command.brake,
             perception_confidence=result.perception.confidences[0],
             stability_score=result.stabilized.stability_score,
             kalman_active=False,
             fps=self.stats.fps(),
-            latency_ms=latency.mean_ms,
-            latency_p95_ms=latency.p95_ms,
+            latency_ms=latency_mean,
+            latency_p95_ms=latency_p95,
             road_fraction=result.stabilized.road_fraction,
             ego_coverage=self.ego_coverage,
             segmentation_mode=self.segmentation_mode,
@@ -256,8 +379,11 @@ class VisualizationNode(Node):
         )
 
     def _handle_key(self, key):
-        """orfd's display keys. E and P start and stop the vehicle, so they
-        do nothing here."""
+        """
+        Handle orfd's display keys.
+
+        E and P start and stop the vehicle in orfd, so they do nothing here.
+        """
         if key in (ord('t'), ord('T')):
             self.timing_overlay = not self.timing_overlay
         elif ord('0') <= key <= ord('9') and key - ord('0') in DEBUG_VIEW_KEYS:
@@ -266,6 +392,7 @@ class VisualizationNode(Node):
 
 
 def main(args=None):
+    """Run the dashboard, refusing to start without a display."""
     rclpy.init(args=args)
     # OpenCV's Qt backend only draws through X11, and with no display it
     # aborts the process rather than raising, so check before any window opens.

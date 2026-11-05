@@ -1,6 +1,6 @@
 # HATCI off-road perception stack: containerized handoff
 
-Image tag `hatci-vehicle:draft6`, 34.1 GB on disk.
+Image tag `hatci-vehicle:draft7`, 34.1 GB on disk.
 
 This runs the configuration **26s segmentation under the BEV grid planner**.
 Nothing is installed on the host and nothing is read from the host filesystem: `docker load` the tarball and run it.
@@ -34,24 +34,27 @@ Any ros2 launch argument is appended and wins: `./run_vehicle.sh clip1 can plann
 The grid needs ego motion to register one frame against the next, so the two belong to the same switch.
 Mode 2 is the exception: a bag carries its own `/CAN`, so replay turns the grid on by itself, and `nocan` is how you turn it back off.
 
-Measured on our bench Jetson, all six configurations:
+Measured on draft7 on our bench Jetson, all six configurations, headless, with the clocks unpinned after a reboot:
 
 | Mode | `/road_mask` | `/path` | `/odom` |
 |---|---|---|---|
-| 1. `clip1` | 30.0 | 30.0 | - |
-| 2. `replay <bag>` | 29.8 | 29.8 | 30.3 |
-| 2. `replay <bag> nocan` | 29.8 | 29.8 | - |
-| 3. `camera` | 30.0 | 30.0 | - |
-| 4. `camera can` | 30.0 | 30.0 | - |
-| 5. `clip1 can` | 30.1 | 30.1 | 30.3 |
+| 1. `clip1` | 29.7 | 29.4 | - |
+| 2. `replay <bag>` | 29.7 | 29.9 | 30.1 |
+| 2. `replay <bag> nocan` | 28.3 | 28.6 | - |
+| 3. `camera` | 29.1 | 29.3 | - |
+| 4. `camera can`, with `/CAN` replayed from a bag | 29.9 | 30.0 | 29.9 |
+| 5. `clip1 can` | 30.0 | 30.0 | 30.0 |
+
+Rows 3 and 4 only show that the graph keeps up on the camera path.
+We did not check the picture during those runs.
 
 Mode 2 loses no frames.
 The source node does report frame gaps while replaying, but those belong to the recording: a direct scan of `bag_20261006_125333`, with no pipeline involved, found 43 absent counters and 43 repeated ones and zero backward jumps, and three consecutive replays reproduced the same list byte for byte.
 Do not lower `bag_rate` to silence them: replaying below real time scales the dead-reckoned ego motion by 1/rate and stretches the BEV grid by the same factor, silently, because the odometry and the grid decay both measure time by the wall clock rather than by the recorded stamps.
 Item 1.9 in `OPEN-ITEMS.md` is the question that would let us fix that properly.
 
-Mode 4 shows no `/odom` above because there is no vehicle bus on the bench.
-It has been validated against a `/CAN` publisher fed from your bags, never against a real bus.
+Mode 4's `/CAN` came from `ros2 bag play` feeding one of your bags, decoded with our reconstruction of `ads_messages`, because there is no vehicle bus on the bench.
+It has never run against a real bus.
 
 **Four things worth knowing before any of this touches a vehicle.**
 
@@ -81,7 +84,8 @@ planner       29.2 Hz | work p50 14.5 p95 20.4 ms |                        age p
 ```
 
 So the planner is acting on frames about 54 ms old with the dashboard on, and 38 ms without it.
-Half the segmentation node is not the model: 19.0 ms of work around a 10.1 ms forward pass, the rest being `cv_bridge` conversion in and mask encoding out.
+Half the segmentation node is not the model: 19.0 ms of work around a 10.1 ms `predict()` call.
+The rest has not been timed piece by piece; it covers `cv_bridge` conversion in, mask extraction and clipping, encoding and publishing.
 
 Verified on our bench Jetson (L4T R36.3.0, JetPack 6.0):
 
@@ -89,8 +93,8 @@ Verified on our bench Jetson (L4T R36.3.0, JetPack 6.0):
 entrypoint: CAN odometry from bag_20261006_125333.csv, BEV grid planner
 entrypoint: 7987 frames, 7998 CAN rows (0.1% apart)
 === selftest: 26s + BEV grid on clip1, headless ===
-ok: /road_mask average rate: 30.353
-ok: /path      average rate: 30.401
+ok: /road_mask average rate: 29.994
+ok: /path      average rate: 29.988
 === selftest PASSED ===
 ```
 
@@ -113,8 +117,9 @@ What the selftest proves is narrower and is the thing worth proving on a new boa
 /bench/data/can/     bag_20261006_*.csv         CAN odometry extracted from your bags
 /bench/overlays/     odom_node.py  live_odom_node.py  install_live_odom.py
 /bench/scripts/      extract_can.py, export_engines.py, semantic_shim.py, probes
-/src/perception_suite    ROS package source (also built into /opt/ws)
-/src/offroad_autonomy    the planning and perception library, pip installed
+/src/perception_suite      ROS package source (also built into /opt/ws)
+/src/perception_suite_msgs the two message types the planner and controller share
+/src/offroad_autonomy      the planning and perception library, pip installed
 /opt/ws/             the colcon workspace, prebuilt
 /opt/hatci/entrypoint.sh
 ```
@@ -124,8 +129,9 @@ The pipeline configs name weights by absolute path, `model_weights: "/bench/mode
 Nothing in the image reads anything from the host filesystem.
 
 The `.onnx` files are in the image on purpose.
-If your TensorRT differs from ours the `.engine` files will not deserialize, and `trtexec` can rebuild from the ONNX without needing torch or ultralytics at all.
-See item 2.1.
+The `.engine` files are tied to the TensorRT inside the image, 10.3.0.30, rather than to anything installed on your host.
+TensorRT warns on every run, on our board too, that the engine plan came from a different model of device, and `trtexec` can rebuild from the ONNX without needing torch or ultralytics at all.
+See items 2.1 and 5.7.
 
 **Only 26s should be deployed.**
 The two VOS-trained variants are present for completeness but reject their own perception 5 to 11 times more often than the originals, and should not be considered until R2 scores their segmentation accuracy.
@@ -169,7 +175,9 @@ The offline integration was validated against the bags' own GPS at 0.6 to 1.3 pe
 The full `.msg` text, including every nested type, is embedded in the bag files, which is how `extract_can.py` decodes them with no package installed, so we reconstructed it from there and it is in this image at `/opt/replay_ws`.
 It is validated against the recorded data, and the entrypoint prefers your package over ours whenever yours is installed.
 Your copy is still worth having for one reason: it removes the risk that your current schema has drifted from the October bags, which is the one thing our reconstruction cannot rule out.
-See section 1 of `OPEN-ITEMS.md`.
+This matters more now that the image runs on your host, because a package installed on the host is not visible inside the container.
+Unless yours is added to the container, the entrypoint falls back to our reconstruction on a live bus, and says so in the log.
+See section 1 and item 5.6 of `OPEN-ITEMS.md`.
 
 The type is resolved at runtime rather than imported, so the module still loads on a board without `ads_messages` and the rest of the pipeline comes up normally.
 It logs why it is quiet instead of taking the launch down.
@@ -207,14 +215,24 @@ Dockerizing does not remove these.
 
 | | |
 |---|---|
-| `--runtime nvidia` | nvidia-container-toolkit. CUDA and TensorRT userspace are mounted in from the host, not baked into the image. Ships with JetPack. |
+| `--runtime nvidia` | nvidia-container-toolkit. Mounts the host's driver, including `libcuda`. The CUDA 12.6.68 runtime and TensorRT 10.3.0.30 are in the image: both are present with the runtime removed, and `libcuda` is not. Ships with JetPack. |
 | `--network host` | how the container sees `can0` at all. A bus up on the host needs no `--device` flag: verified by binding an `AF_CAN` socket to `can0` from inside this image with no other privilege. |
-| `--ipc=host` | lets the six nodes pass frames through shared memory rather than copying. Every reported number used it. |
+| `--ipc=host` | shares the host's IPC namespace, intended to let DDS use shared memory. Every reported number used it; its effect has not been measured on its own. |
 | `--privileged` | **camera runs only.** The Tegra capture path needs `capture-vi-channel*`, `capture-isp-channel*`, `nvhost-ctrl-vi*`, `nvmap` and `tegra_camera_ctrl`. `--device` is not enough: the cgroup device rules still block the unlisted ones, and the symptom is the device opening cleanly and then every read timing out with `select() timeout`. Recorded runs do not need it and do not get it. |
-| TensorRT 10.3.0.30 | only for the prebuilt `.engine` files. Rebuild from the bundled `.onnx` if yours differs. |
 
 Clock pinning is sysfs writes outside the container; nothing in the pipeline reads it and the stack runs either way.
-Pinned is what the reported latency was measured at: pinning cut p50 latency by 25 to 42 percent across the matrix, averaging about a third.
+Pinned is what the reported latency was measured at: in the R1 matrix, the unpinned run's median latency was 25 to 42 percent higher.
+We also compared the two states directly on draft7, on the same day, in mode 5 with no dashboard, on the same code apart from comment edits:
+
+| | Unpinned | Pinned |
+|---|---|---|
+| `predict()` p50 | 20.4 ms | 8.4 ms |
+| Frame age at the planner, p50 | 60.3 ms | 37.6 ms |
+| `/path` rate | 30.0 Hz | 30.0 Hz |
+
+Frames reach the planner about 60 percent older unpinned, while the frame rate does not change.
+That is above the R1 range, which was measured with the dashboard running, so the two figures are not directly comparable.
+Pin the clocks on any deployment and before any latency measurement, and check them again after a reboot, because pinning did not survive one on our board.
 The frame-rate requirement passes either way, so pinning is headroom rather than a dependency.
 
 ## 6. Known gaps in this draft
@@ -224,50 +242,53 @@ Honest list, so nothing is discovered on your board.
 1. **Live CAN odometry has never run against a real vehicle bus.** It runs: mode 4 holds 30 FPS with `live_odom_node` subscribed to `/CAN`. But the publisher it has been tested against was `ros2 bag play` feeding one of your October bags, which reproduces the recorded type, QoS, rate and field layout and nothing beyond that. If your live bus differs in any of those, this is where it shows. Section 1.
 2. **Replaying a bag below real time silently distorts the odometry.** `live_odom_node` integrates dead reckoning on wall-clock arrival time and the BEV grid decays on wall-clock too, neither of which reads the recorded stamps, so at `bag_rate:=r` the ego motion is scaled by 1/r and the grid stretches by the same factor with no warning. The default is 1.0, where it is correct, and the launch argument says not to lower it. It does not affect a live vehicle, where the two clocks agree. Item 1.9.
 3. **Camera height and pitch are guesses.** 1.5 m and 0.0 degrees. Items 3.1, 3.2.
-4. **The live camera path is tested on our carrier, not yours.** `camera_index:=0` is our Neousys carrier's GMSL capture, and the full pipeline runs live off it at 30 FPS. What is still open is the interface and connector your camera uses, which is item 5.1. Note also that this hardware does not hot-plug, so the camera has to be attached before the board is powered on; item 5.4 has the detail.
-5. **Nothing detects missing odometry, and that failure corrupts the grid rather than clearing it.** `5_planner_node` latches: `on_odom` stores the pose with `valid=True` and nothing ever expires it, and the file contains no reference to time at all. Our node goes silent rather than publishing a stale pose, but silence is not on its own a safe fallback: the planner keeps planning from the last pose it received while the vehicle keeps moving, so new masks are stamped into cells it has already left and observations from different real positions pile into the same ones. An earlier version of this item said the grid falls back to forgetting and called that the conservative failure; it was wrong on both counts. Our node going quiet is necessary but not sufficient, and something downstream has to notice. Item 1.8.
-6. **`/command` is a `Float32MultiArray` with no header.** Needs a real typed interface and something to subscribe to it. Item 4.1.
-7. **The image is 34 GB.** It carries all four models at two input sizes each and three 300 MB demo clips. Trimming to 26s only and one clip would cut it substantially; worth doing once the configuration is locked.
+4. **The live camera path is tested on our carrier, not yours.** `camera_index:=0` is our Neousys carrier's GMSL capture, and the full pipeline runs live off it at 30 FPS. The node builds a plain `v4l2src` GStreamer pipeline with no NVIDIA-specific elements, so it is not tied to our hardware, but `camera` mode's defaults are: `camera_index:=0`, `pixel_format:=NV16`, 1920x1080 and `rotate_180:=true`. Append your own values to override them, and check the rotation first, because ours is on only because our camera is mounted inverted. Item 5.1. Note also that our carrier does not hot-plug, so the camera has to be attached before the board is powered on; item 5.4 has the detail.
+5. **Fixed: the planner no longer latches a stale pose.** All three consumers of odometry now expire it on the same `odom_timeout_s`. `7_controller_node` commands a full brake, the dashboard zeroes its readouts, and `5_planner_node` drops the pose so `ground_pose()` returns None and the BEV grid forgets instead of accumulating. The old behaviour was the worse of the two failures: `on_odom` stored the pose with `valid=True` and nothing expired it, so new masks were registered against a position the vehicle had already left and observations from different real places piled into the same cells, corrupting the map rather than emptying it. Expiry is deliberately not armed until the first odometry message ever arrives, because a pipeline on a fixed `speed_mps` with no CAN source is a supported configuration. We triggered it on the board by killing the odometry node mid-run: the controller went to full brake within a second with the reason `odometry stale by 0.85s`, the planner logged the drop and kept publishing, and control recovered about three seconds after odometry returned. Path reach did not change during the outage, so that run cannot show the grid clearing; that part rests on the code and the unit tests. What is still open is what the *vehicle* should do about it, which is yours to specify: item 1.8 and item 4.4.
+6. **Nothing on the vehicle side consumes `/command`.** The message itself is no longer a gap: it is a typed `perception_suite_msgs/ControlCommand` carrying a header, steering, throttle, brake, parking brake and a reason string, published at 30 Hz by `7_controller_node` and drawn on the dashboard. That replaces the headerless `Float32MultiArray` this item used to describe. What does not exist is anything that subscribes to it and actuates the car. Item 4.1.
+7. **The image is 34.1 GB, and almost none of that is ours.** An earlier version of this item said trimming to 26s and one clip would cut it substantially. That was wrong, and the measurement is worth recording so nobody tries it expecting a large win. The base `hatci-pipeline:v1` is 31.5 GB of the 34.1; everything this repository adds is 2.6 GB, of which `/bench` is 1.33 GB (873 MB of clips and CAN, 395 MB of models). We built it to measure: dropping the other models and two clips gives 32.3 GB on disk and an 11.7 GB tarball, about 7 percent smaller, and it passes the selftest. The bulk is `/usr/lib/aarch64-linux-gnu` at 6.5 GB and `dist-packages` at 2.2 GB inside the base, which cannot be trimmed without changing the base, and changing the base would invalidate every number reported here. `SLIM=1 ./build.sh` does that trim if a transfer makes it worth losing modes `clip2` and `clip3`; it is off by default.
 
 ## 7. Rebuilding
 
 ```bash
-TAG=hatci-vehicle:draft7 ./build.sh   # on a board that has hatci-pipeline:v1
+TAG=hatci-vehicle:draft8 ./build.sh   # on a board that has hatci-pipeline:v1
 ```
 
-The default tag is `hatci-vehicle:draft6`, and `build.sh` refuses to overwrite a tag that already exists.
+`SLIM=1 ./build.sh` stages only the 26s weights and clip1, which saves about 0.9 GB off the tarball and costs you modes `clip2` and `clip3`. See known gap 7 for why the saving is small.
+
+The default tag is `hatci-vehicle:draft7`, and `build.sh` refuses to overwrite a tag that already exists.
 That is deliberate: rebuilding over a tag would replace a verified artifact with an unverified one of the same name, and nothing downstream could tell the difference.
-`draft6` was built from commit `6fcf840` and passes its selftest at 30.4 FPS on both `/road_mask` and `/path`.
+`draft7` passes its selftest at 29.99 FPS on both `/road_mask` and `/path`.
+It was built from a working tree that was not yet committed, which `build.sh` reports in its own output; the commit it corresponds to has to be recorded here before this is treated as a release build.
 Pass a new `TAG`, or `FORCE=1` to overwrite on purpose.
 
 `build.sh` stages the context from two places.
-The two ROS packages come from a clone of this repo, so the image is built from exactly the source in `src/` and nothing else.
+The three packages come from a clone of this repo, so the image is built from exactly the source in `src/` and nothing else.
 What cannot be published comes off the board: the model weights and TensorRT engines, the demo clips, the extracted CAN csvs, and `bench-ros/scripts`.
 It writes to no source tree, and it prints the commit it built from and warns when that tree is dirty, so an image can be traced back to a commit.
 
 Delivering it:
 
 ```bash
-docker save hatci-vehicle:draft6 | pigz -p 6 > hatci-vehicle-draft6.tar.gz
+docker save hatci-vehicle:draft7 | pigz -p 6 > hatci-vehicle-draft7.tar.gz
 # on your board
-pigz -dc hatci-vehicle-draft6.tar.gz | docker load     # or gunzip -c
+pigz -dc hatci-vehicle-draft7.tar.gz | docker load     # or gunzip -c
 ```
 
-This is the tarball route rather than a Dockerfile build, so you need no network access and no NGC login, and you get bit-for-bit the image we benchmarked.
+This is the tarball route rather than a Dockerfile build, so you need no network access and no NGC login, and you get bit-for-bit the image we tested.
 
 The built artifact, verified:
 
 | | |
 |---|---|
-| file | `hatci-vehicle-draft6.tar.gz` |
-| compressed | 12 GB (from 34.1 GB on disk) |
-| sha256 | `96a6953933d791dffa199712b39befa6124f912a1b50cc764f7ca9782d68a8e2` |
-| checked | `pigz -t` clean; valid OCI archive (`index.json`, `manifest.json`, `oci-layout`, 65 entries) |
+| file | `hatci-vehicle-draft7.tar.gz` |
+| compressed | 12.5 GB (from 34.1 GB on disk) |
+| sha256 | `060230cc1efec2fe439841dbcc2657b0ee4d4572eeaa621e1abb3af726e0bc18` |
+| checked | `pigz -t` clean; valid OCI archive (`index.json`, `manifest.json`, `oci-layout`, 66 entries) |
 
 Verify the checksum after transfer before loading:
 
 ```bash
-sha256sum -c <<< "96a6953933d791dffa199712b39befa6124f912a1b50cc764f7ca9782d68a8e2  hatci-vehicle-draft6.tar.gz"
+sha256sum -c <<< "060230cc1efec2fe439841dbcc2657b0ee4d4572eeaa621e1abb3af726e0bc18  hatci-vehicle-draft7.tar.gz"
 ```
 
-Loading needs roughly 34 GB free on your board on top of the 12 GB archive.
+Loading needs roughly 34 GB free on your board on top of the 12.5 GB archive.

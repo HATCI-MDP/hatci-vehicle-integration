@@ -1,4 +1,5 @@
-"""Replay the bags' CAN odometry, one sample per published frame.
+"""
+Replay the bags' CAN odometry, one sample per published frame.
 
 The BEV grid needs to register consecutive frames against each other, which
 needs ego motion. The bags carry it at 30 Hz - speed from the wheels, yaw rate
@@ -32,7 +33,10 @@ from perception_suite.common import LATEST_ONLY
 
 
 class OdomNode(Node):
+    """Ego odometry replayed from an extracted CAN csv, published as odom."""
+
     def __init__(self):
+        """Load the csv and subscribe to raw_frames, which paces the replay."""
         super().__init__('odom_node')
         path = self.declare_parameter('can_csv', '').value
         if not path:
@@ -57,6 +61,7 @@ class OdomNode(Node):
             f'({(len(self.rows) - 1) / span if span > 0 else 0:.1f} Hz) from {path}')
 
     def on_frame(self, msg):
+        """Publish the csv row that pairs with this frame."""
         if self.n >= len(self.rows):
             if not self.loop:
                 return
@@ -82,6 +87,7 @@ class OdomNode(Node):
 
 
 def main(args=None):
+    """Run the node until shutdown."""
     rclpy.init(args=args)
     try:
         rclpy.spin(OdomNode())

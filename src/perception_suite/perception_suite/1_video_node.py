@@ -1,3 +1,11 @@
+"""
+Stage 1, video source: publishes raw_frames from a file.
+
+Stands in for the camera so the rest of the graph can be run and measured
+against a recording. 1_camera_node is the live equivalent and publishes the
+same topic in the same format.
+"""
+
 import signal
 
 import cv2
@@ -12,6 +20,7 @@ class VideoPublisher(Node):
     """Stage 1: stands in for the BeamNG camera, publishing /raw_frames."""
 
     def __init__(self):
+        """Open the video file and start the publish timer."""
         super().__init__("video_node")
         video_path = self.declare_parameter("video_path", "test_video.mp4").value
         # Downscaled for DDS bandwidth only; the working size is set by the
@@ -35,6 +44,7 @@ class VideoPublisher(Node):
         self.timer = self.create_timer(1.0 / fps, self.timer_callback)
 
     def timer_callback(self):
+        """Publish the next frame, looping or stopping at the end."""
         ret, frame = self.cap.read()
         if not ret:
             if not self.loop:
@@ -62,6 +72,7 @@ class VideoPublisher(Node):
 
 
 def main(args=None):
+    """Run the video source until shutdown."""
     rclpy.init(args=args)
     try:
         rclpy.spin(VideoPublisher())

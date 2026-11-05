@@ -1,3 +1,11 @@
+"""
+Stage 4: road_mask in, stabilized_mask out.
+
+Runs offroad_autonomy's TemporalStabilizer. Its smoothing (EMA and morphology)
+is switched off in the shipping config, so what remains is the minimum-area
+check, re-applying the ego mask, and a stability score for diagnostics.
+"""
+
 import signal
 
 import rclpy
@@ -17,6 +25,7 @@ class PostprocessNode(Node):
     """Stage 4: EMA and morphology over the mask (TemporalStabilizer)."""
 
     def __init__(self):
+        """Build the stabilizer and subscribe to road_mask."""
         super().__init__('postprocess_node')
         config = load_pipeline_config(self)
         self.valid_roi = PerceptionView(config).valid_roi
@@ -28,6 +37,7 @@ class PostprocessNode(Node):
             Image, 'road_mask', self.on_mask, LATEST_ONLY)
 
     def on_mask(self, msg):
+        """Stabilize one mask against the frames before it."""
         t0 = self.stage_timer.start()
         mask, confidence = decode_mask(self.bridge.imgmsg_to_cv2(msg, 'mono8'))
         perception = PerceptionResult(
@@ -42,6 +52,7 @@ class PostprocessNode(Node):
 
 
 def main(args=None):
+    """Run the node until shutdown."""
     rclpy.init(args=args)
     try:
         rclpy.spin(PostprocessNode())

@@ -802,15 +802,33 @@ class AutonomyDashboard:
         latency_note = f"Over {thresholds.latency_budget_ms:.0f} Ms Budget"
         if latency_level == bands.GOOD:
             latency_note = f"Within {thresholds.latency_budget_ms:.0f} Ms Budget"
+        latency_value = f"{telemetry.latency_ms:.0f} / {telemetry.latency_p95_ms:.0f}"
+        latency_unit = "ms"
+        latency_fraction = telemetry.latency_p95_ms / (
+            thresholds.latency_budget_ms * thresholds.latency_bar_scale
+        )
+        # Capture-to-display can only be measured when the capture stamp is on
+        # this clock. Under bag replay it is the recording's own time, so there
+        # is nothing to measure and the caller passes NaN to say so.
+        #
+        # Saying "n/a" is the whole point. Left alone this tile drew the age of
+        # the RECORDING, about 2.5 billion ms. The tempting fix is to send zero
+        # instead, and that is worse: "0 / 0 ms  Within Budget" is a plausible
+        # screenshot of a number nobody measured.
+        if not math.isfinite(telemetry.latency_p95_ms):
+            latency_value = "n/a"
+            latency_unit = ""
+            latency_level = bands.WARN
+            latency_note = "Stamps Not On This Clock"
+            latency_fraction = 0.0
         self._draw_health_tile(
             canvas,
             layout.latency,
-            f"{telemetry.latency_ms:.0f} / {telemetry.latency_p95_ms:.0f}",
-            "ms",
+            latency_value,
+            latency_unit,
             latency_level,
             latency_note,
-            telemetry.latency_p95_ms
-            / (thresholds.latency_budget_ms * thresholds.latency_bar_scale),
+            latency_fraction,
             1.0 / thresholds.latency_bar_scale,
         )
 

@@ -19,12 +19,12 @@
 # camera mode.
 set -eo pipefail
 
-IMAGE="${IMAGE:-hatci-vehicle:draft6}"
+IMAGE="${IMAGE:-hatci-vehicle:draft7}"
 MODE="${1:-clip1}"
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
   echo "run_vehicle: image $IMAGE not found. Load it with:" >&2
-  echo "  gunzip -c hatci-vehicle-draft6.tar.gz | docker load" >&2
+  echo "  gunzip -c hatci-vehicle-draft7.tar.gz | docker load" >&2
   exit 1
 fi
 
@@ -114,10 +114,12 @@ fi
 
 # --network host    is how the container sees can0 at all: a bus that is up on
 #                   the host needs no --device flag.
-# --ipc=host        lets the six nodes pass frames through shared memory rather
-#                   than copying them. Every reported number used it.
-# --runtime nvidia  mounts the host's CUDA and TensorRT userspace in. This is
-#                   the one host dependency dockerizing does not remove.
+# --ipc=host        shares the host's IPC namespace, intended to let DDS use
+#                   shared memory. Every reported number used it; its effect
+#                   has not been measured on its own.
+# --runtime nvidia  mounts the host's driver, including libcuda, into the
+#                   container. The CUDA runtime and TensorRT are in the image.
+#                   This is the host dependency dockerizing does not remove.
 exec docker run --rm "${TTY[@]}" \
   --runtime nvidia --network host --ipc=host \
   "${XSOCK[@]}" "${CAMERA[@]}" ${BAGMOUNT[@]+"${BAGMOUNT[@]}"} \

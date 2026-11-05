@@ -1,4 +1,5 @@
-"""Stage 1: H.264 frames from a compressed image topic, published as /raw_frames.
+"""
+Stage 1: H.264 frames from a compressed image topic, published as /raw_frames.
 
 Interchangeable with 1_video_node and 1_camera_node: same topic, same encoding,
 same downscale. One deliberate difference, and it is the reason this node
@@ -18,7 +19,7 @@ Why a GStreamer subprocess rather than cv2.imdecode
 ---------------------------------------------------
 The payload is H.264, not JPEG. `cv2.imdecode` handles still images only and
 returns None on every frame. The stream is also IPPP: most messages are a
-single non-IDR slice and only about one in eight carries SPS+PPS+IDR, so frames
+single non-IDR slice and exactly one in five carries SPS+PPS+IDR, so frames
 are NOT independently decodable. The decoder has to hold state and be fed in
 order, which rules out any per-message decode.
 
@@ -203,6 +204,7 @@ class BagPublisher(Node):
     """Decode an H.264 image topic and republish it as raw_frames."""
 
     def __init__(self):
+        """Open the bag's image topic and start the decode pipeline."""
         super().__init__("bag_node")
 
         topic = self.declare_parameter(
@@ -275,7 +277,8 @@ class BagPublisher(Node):
 
     # -- decoder: shared plumbing -------------------------------------------
     def _caps_tail(self):
-        """Pipeline tokens after the decoder, identical in both backends.
+        """
+        Pipeline tokens after the decoder, identical in both backends.
 
         A token list rather than a string, so the subprocess backend can hand
         it straight to argv without splitting it back apart. An earlier version
@@ -367,7 +370,12 @@ class BagPublisher(Node):
                 gbuf.unmap(info)
 
     def _drain_bus(self):
-        """GStreamer reports decode failures on the bus, not through the API."""
+        """
+        Drain the bus, where GStreamer reports decode failures.
+
+        Failures do not come back through the API, so a pipeline that is
+        quietly failing looks identical to one that is merely slow.
+        """
         while True:
             msg = self.bus.pop_filtered(Gst.MessageType.ERROR
                                         | Gst.MessageType.WARNING)
@@ -495,7 +503,8 @@ class BagPublisher(Node):
                     "than dropping a frame.", once=True)
 
     def _check_continuity(self, frame_id):
-        """Report what the source delivered. This is NOT a measure of our loss.
+        """
+        Report what the source delivered. This is NOT a measure of our loss.
 
         Scanning bag_20261006_125333 directly found 43 absent counters and 43
         repeated ones already in the recording, with zero backward jumps, and
@@ -533,6 +542,7 @@ class BagPublisher(Node):
 
     # -- teardown -----------------------------------------------------------
     def shutdown(self):
+        """Stop the decoder and release its thread."""
         self.running = False
         try:
             self.feed.put_nowait(None)
@@ -563,6 +573,7 @@ class BagPublisher(Node):
 
 
 def main(args=None):
+    """Run the node until shutdown."""
     rclpy.init(args=args)
     node = None
     try:

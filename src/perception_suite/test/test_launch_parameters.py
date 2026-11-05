@@ -1,4 +1,5 @@
-"""Every parameter a node declares must be reachable from the launch file.
+"""
+Every parameter a node declares must be reachable from the launch file.
 
 This test exists because the same mistake happened twice. 1_camera_node grew
 capture_width and capture_height, and 1_bag_node grew decode_backend, and in
@@ -107,7 +108,7 @@ def launch_arguments(tree):
 
 
 def sources_table(tree):
-    """The SOURCES literal: source name -> (executable, [argument names])."""
+    """Return the SOURCES literal: source name -> (executable, [arguments])."""
     for node in ast.walk(tree):
         if not (isinstance(node, ast.Assign)
                 and any(isinstance(t, ast.Name) and t.id == 'SOURCES'
@@ -143,7 +144,7 @@ def launch_defaults(tree):
 
 
 def module_constant(path, name):
-    """A module-level NAME = 'literal' assignment."""
+    """Return a module-level NAME = 'literal' assignment."""
     for node in ast.walk(ast.parse(path.read_text())):
         if (isinstance(node, ast.Assign)
                 and any(isinstance(t, ast.Name) and t.id == name

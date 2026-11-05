@@ -1,4 +1,5 @@
-"""TensorRT engines for the segmentation stage, built on first use and cached.
+"""
+TensorRT engines for the segmentation stage, built on first use and cached.
 
 An engine has the prompts and input size compiled in, and only runs on the
 GPU model and TensorRT version that built it. All of those go into the cached
@@ -34,13 +35,25 @@ def unsupported_reason() -> str | None:
 
 
 def model_task(weights: str) -> str:
-    """The task the weights declare: 'segment' for YOLOE, 'semantic' for a
-    semantic segmentation fine-tune."""
+    """
+    Return the task the weights declare.
+
+    'segment' for a YOLOE model, 'semantic' for a semantic segmentation
+    fine-tune, which has fixed classes and ignores the prompts.
+    """
     from ultralytics import YOLO
     return YOLO(weights).task
 
 
 def engine_path(config: PipelineConfig, scene: str = '') -> Path:
+    """
+    Return the cache path for the TensorRT engine this config implies.
+
+    The name carries a hash of the weights' file name, the prompts, the input
+    size, the GPU name and the TensorRT version, so changing any of those builds
+    a new engine. Replacing the weights under the same file name does not: the
+    hash reads the name, not the contents.
+    """
     import tensorrt
     import torch
     weights = Path(config.model_weights)

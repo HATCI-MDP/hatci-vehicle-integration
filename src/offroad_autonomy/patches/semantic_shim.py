@@ -118,9 +118,19 @@ def _path_memory(repo: Path) -> None:
                    check=True)
 
 
+def _latency_na(repo: Path) -> None:
+    """Chained likewise: the latency tile drew the age of the recording under
+    bag replay, because capture-to-display needs the capture stamp to be on
+    this clock. See scripts/latency_na.py."""
+    import subprocess, sys as _sys
+    subprocess.run([_sys.executable, str(_HERE / "latency_na.py"), "--repo", str(repo)],
+                   check=True)
+
+
 def apply(repo: Path) -> int:
     _fix_road_class(repo)
     _path_memory(repo)
+    _latency_na(repo)
     target = repo / "src" / "offroad_autonomy" / "perception" / "road_segmenter.py"
     if not target.exists():
         print(f"  road_segmenter.py not found under {repo}")

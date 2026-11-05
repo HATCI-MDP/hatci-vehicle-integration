@@ -1,4 +1,5 @@
-"""Helpers shared by the pipeline stage nodes.
+"""
+Helpers shared by the pipeline stage nodes.
 
 Masks travel between stages as mono8 images whose road pixels hold the
 frame's best detection confidence. That keeps the one number the perception
@@ -46,7 +47,7 @@ EXTERNAL_LATEST = QoSProfile(
 
 
 #: Beyond this, the stamp is not on our clock, so the difference is not latency.
-_MAX_PLAUSIBLE_AGE_S = 10.0
+MAX_PLAUSIBLE_AGE_S = 10.0
 
 #: Five seconds rather than one. Four stages reporting every second drowns the
 #: entrypoint's own output, and nothing here changes fast enough to need it.
@@ -54,7 +55,8 @@ _REPORT_PERIOD_S = 5.0
 
 
 class StageTimer:
-    """Per-stage timing for one pipeline node, logged periodically.
+    """
+    Per-stage timing for one pipeline node, logged periodically.
 
     Two numbers, because they answer different questions.
 
@@ -75,6 +77,7 @@ class StageTimer:
     """
 
     def __init__(self, node: Node, stage: str) -> None:
+        """Register the periodic report timer for one named stage."""
         self._node = node
         self._stage = stage
         self._stats = RuntimeStats()
@@ -83,9 +86,11 @@ class StageTimer:
 
     @staticmethod
     def start() -> float:
+        """Return a monotonic start time for one unit of work."""
         return time.perf_counter()
 
     def done(self, t0: float, header, extra: dict[str, float] | None = None) -> None:
+        """Record one unit of work, and its age against the frame's stamp."""
         self._stats.tick()
         self._stats.record('work', (time.perf_counter() - t0) * 1000.0)
         if extra:
@@ -93,7 +98,7 @@ class StageTimer:
 
         elapsed = self._node.get_clock().now() - Time.from_msg(header.stamp)
         age_s = elapsed.nanoseconds / 1e9
-        if 0.0 <= age_s <= _MAX_PLAUSIBLE_AGE_S:
+        if 0.0 <= age_s <= MAX_PLAUSIBLE_AGE_S:
             self._stats.record('age', age_s * 1000.0)
             return
         if not self._warned_clock:
@@ -121,8 +126,12 @@ class StageTimer:
 
 
 def load_pipeline_config(node: Node) -> PipelineConfig:
-    """The config:= file with the model:= entry applied. Every stage applies
-    the model, because the planner and visualizer gate on its threshold."""
+    """
+    Return the config:= file with the model:= entry applied.
+
+    Every stage applies the model, because the planner and the visualizer both
+    gate on its confidence threshold.
+    """
     path = settings.resolve(node.declare_parameter('config', settings.DEFAULT_CONFIG).value)
     name = node.declare_parameter('model', settings.DEFAULT_MODEL).value
     node.get_logger().info(f'Loading pipeline config: {path} (model: {name})')
@@ -136,7 +145,8 @@ def load_pipeline_config(node: Node) -> PipelineConfig:
 
 
 def encode_mask(mask: np.ndarray, confidence: float) -> np.ndarray:
-    """Road mask plus a frame-wide confidence, packed into one mono8 image.
+    """
+    Road mask plus a frame-wide confidence, packed into one mono8 image.
 
     The confidence is the pixel level, so 0 means "not road". A non-zero
     confidence that rounds to 0 is clamped to 1, otherwise a real but very low
@@ -151,4 +161,5 @@ def encode_mask(mask: np.ndarray, confidence: float) -> np.ndarray:
 
 
 def decode_mask(confidence_mask: np.ndarray) -> tuple[np.ndarray, float]:
+    """Unpack what encode_mask produced back into a mask and its confidence."""
     return confidence_mask > 0, float(confidence_mask.max(initial=0)) / 255.0

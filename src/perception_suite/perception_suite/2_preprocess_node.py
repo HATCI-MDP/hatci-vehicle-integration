@@ -1,3 +1,11 @@
+"""
+Stage 2: raw_frames in, preprocessed_frames out.
+
+Resize to the working size and apply the configured enhancement, through
+offroad_autonomy's ImagePreprocessor. The header is carried over unchanged so
+every later stage can measure its own age against the capture stamp.
+"""
+
 import signal
 
 import rclpy
@@ -14,6 +22,7 @@ class PreprocessNode(Node):
     """Stage 2: resize to the working size and apply CLAHE (ImagePreprocessor)."""
 
     def __init__(self):
+        """Build the preprocessor and subscribe to raw_frames."""
         super().__init__('preprocess_node')
         config = load_pipeline_config(self)
         self.preprocessor = ImagePreprocessor(config)
@@ -24,6 +33,7 @@ class PreprocessNode(Node):
             Image, 'raw_frames', self.on_frame, LATEST_ONLY)
 
     def on_frame(self, msg):
+        """Preprocess one frame and republish it."""
         t0 = self.stage_timer.start()
         packet = self.preprocessor.process(self.bridge.imgmsg_to_cv2(msg, 'bgr8'))
         out = self.bridge.cv2_to_imgmsg(packet.preprocessed, 'bgr8')
@@ -33,6 +43,7 @@ class PreprocessNode(Node):
 
 
 def main(args=None):
+    """Run the node until shutdown."""
     rclpy.init(args=args)
     try:
         rclpy.spin(PreprocessNode())

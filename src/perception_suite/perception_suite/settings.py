@@ -1,5 +1,8 @@
-"""The pipeline's three choices, resolved the same way by the launch file and
-every node: which config (the input), which model, and which scene.
+"""
+The pipeline's three choices, resolved the same way everywhere.
+
+Which config (the input), which model, and which scene. The launch file and
+every node resolve them identically.
 
 config  A YAML file name, looked up in src/perception_suite/config, so
         config:=demo_route.yaml works from any directory. An absolute path is
@@ -24,7 +27,8 @@ DEFAULT_SCENE = 'trail'
 
 
 def config_dir() -> Path:
-    """src/perception_suite/config under --symlink-install, else the installed copy.
+    """
+    src/perception_suite/config under --symlink-install, else the installed copy.
 
     A symlink install links each installed YAML back to its source, so following
     one finds the source folder, and new or edited files take effect without a
@@ -35,6 +39,12 @@ def config_dir() -> Path:
 
 
 def resolve(name: str) -> Path:
+    """
+    Resolve a config name against the package's config directory.
+
+    An absolute path is returned as it is, so config:=demo_route.yaml works
+    from any directory without hiding a caller's explicit path.
+    """
     path = config_dir() / name
     if not path.is_file():
         available = ', '.join(sorted(p.name for p in config_dir().glob('*.yaml')))
@@ -50,8 +60,12 @@ def _perception(path: Path) -> dict:
 
 
 def model(path: Path, name: str) -> dict | None:
-    """{'weights': ..., 'gate_confidence_threshold': ...}, or None if the
-    config predates perception.models and names its weights directly."""
+    """
+    Return the named model's entry, or None if the config defines no models.
+
+    The entry is {'weights': ..., 'gate_confidence_threshold': ...}. A config
+    that predates perception.models names its weights directly instead.
+    """
     models = _perception(path).get('models')
     if not models:
         return None
@@ -62,7 +76,7 @@ def model(path: Path, name: str) -> dict | None:
 
 
 def scene_prompts(path: Path, name: str) -> list[str] | None:
-    """The scene's prompts, or None if the config defines no scenes."""
+    """Return the scene's prompts, or None if the config defines no scenes."""
     scenes = _perception(path).get('scenes')
     if not scenes:
         return None

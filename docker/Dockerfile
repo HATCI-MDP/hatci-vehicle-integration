@@ -68,21 +68,34 @@ COPY bench /bench
 # ---------------------------------------------------------------------------
 # 2. The perception_suite ROS package. Source only: the checkout on the board also
 #    holds ~3.3 GB of stray engines and test videos that nothing reads.
+#
+#    perception_suite_msgs holds the two message types 5_planner_node and
+#    7_controller_node pass between them. It must be copied in beside the
+#    pipeline package, not just built on the bench: perception_suite imports it
+#    at module scope, and colcon would still report a clean build without it
+#    because an ament_python package is not checked for its imports. The
+#    failure would surface only at launch, as ModuleNotFoundError from a node
+#    that worked everywhere it was tested.
 # ---------------------------------------------------------------------------
 COPY src/perception_suite /src/perception_suite
+COPY src/perception_suite_msgs /src/perception_suite_msgs
 
 # ---------------------------------------------------------------------------
 # 3. The offroad_autonomy library (planning and perception), shimmed and installed.
 #
-#    semantic_shim.py runs three patches, and at the pinned commit only two of
+#    semantic_shim.py runs four patches, and at the pinned commit only three of
 #    them actually change anything. Worth knowing before reading its docstring,
-#    which describes the third:
+#    which describes the fourth:
 #
 #      fix_class.py    picks the road class by what the model PREDICTS, not
 #                      only by what it declares. Without it the new weights,
 #                      which name road "Final-Demo", give 100% empty masks.
 #      path_memory.py  stops the dashboard drawing planned path over the bonnet
 #                      in the same solid colour as road it can actually see.
+#      latency_na.py   makes the latency tile say "n/a" when capture-to-display
+#                      cannot be measured. Under bag replay the capture stamp
+#                      is the recording's own time, so the tile drew the age of
+#                      the recording: about 2.5 billion ms.
 #      the shim itself  STANDS DOWN. It adapts RoadSegmenter to a
 #                      task='semantic' model, but the library already supports
 #                      that at this commit, so the shim detects it and returns
@@ -123,6 +136,7 @@ RUN cp -r /src/offroad_autonomy /tmp/build \
 # ---------------------------------------------------------------------------
 RUN mkdir -p /opt/ws/src \
  && cp -r /src/perception_suite /opt/ws/src/ \
+ && cp -r /src/perception_suite_msgs /opt/ws/src/ \
  && python3 /bench/scripts/bev_overlay.py --pkg /opt/ws/src/perception_suite \
  && python3 /bench/overlays/install_live_odom.py --pkg /opt/ws/src/perception_suite \
  && cd /opt/ws \

@@ -1,3 +1,11 @@
+"""
+Stage 1, camera source: publishes raw_frames from the GMSL dashcam.
+
+Interchangeable with 1_video_node, so stages 2 onwards cannot tell which
+source they are fed by. Capture runs on its own thread and the timer publishes
+the newest frame, so a slow consumer drops frames rather than queueing them.
+"""
+
 import signal
 import threading
 import time
@@ -11,13 +19,15 @@ from sensor_msgs.msg import Image
 
 
 class CameraPublisher(Node):
-    """Stage 1: the GMSL dashcam, publishing /raw_frames.
+    """
+    Stage 1: the GMSL dashcam, publishing /raw_frames.
 
     Interchangeable with 1_video_node: same topic, same header, same downscale,
     so stages 2-6 cannot tell which source they are fed by.
     """
 
     def __init__(self):
+        """Open the camera, discard the warm-up frames, and start publishing."""
         super().__init__("camera_node")
         # pipeline.launch.py passes every source argument through
         # LaunchConfiguration.perform(), which yields strings, so these are
@@ -42,10 +52,16 @@ class CameraPublisher(Node):
         # Only NV16 pulled through a GStreamer pipeline produces a correct
         # frame, which is why this no longer uses cv2.VideoCapture(index).
         pixel_format = str(self.declare_parameter("pixel_format", "NV16").value)
-        # The first frame off a freshly started stream carries torn rows, about
-        # 4% of pixels on the bench carrier. It is clean by frame 5 and stays
-        # clean, so the warm-up is discarded rather than published.
-        warmup = int(self.declare_parameter("warmup_frames", "5").value)
+        # A freshly started stream carries torn rows that fade over several
+        # seconds rather than clearing at once. Measured on the bench carrier by
+        # counting green-dominant pixels per frame: 11.6% at frame 0, 61.6% at
+        # frame 1, 0.9% at frame 5, 0.1% at frame 19, and the first frame with
+        # none at all is frame 120. An earlier value of 5 came with a comment
+        # claiming the stream was clean by then; it is not, and the residue is
+        # visible on the dashboard for the first seconds of a camera run.
+        # 120 frames is 4 seconds at 30 FPS, which is short against the engine
+        # load that precedes it.
+        warmup = int(self.declare_parameter("warmup_frames", "120").value)
         # Some mountings present the sensor inverted. Left off by default: a
         # silent 180 degree rotation would put the road at the top of the frame
         # and the ground projection would be confidently wrong rather than
@@ -128,6 +144,7 @@ class CameraPublisher(Node):
                 self._latest = frame
 
     def timer_callback(self):
+        """Publish the newest captured frame, if the reader has produced one."""
         with self._lock:
             frame = self._latest
             self._latest = None
@@ -150,6 +167,7 @@ class CameraPublisher(Node):
         self.publisher_.publish(msg)
 
     def destroy_node(self):
+        """Stop the reader thread and release the camera before shutting down."""
         self._running = False
         reader = getattr(self, "_reader", None)
         if reader is not None:
@@ -160,6 +178,7 @@ class CameraPublisher(Node):
 
 
 def main(args=None):
+    """Run the camera source until shutdown."""
     rclpy.init(args=args)
     try:
         rclpy.spin(CameraPublisher())

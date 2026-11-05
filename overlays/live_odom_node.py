@@ -1,4 +1,5 @@
-"""Publish ego odometry from the vehicle's live /CAN topic, for the BEV grid planner.
+"""
+Publish ego odometry from the vehicle's live /CAN topic, for the BEV grid planner.
 
 Why this node exists
 --------------------
@@ -129,7 +130,10 @@ MAX_PLAUSIBLE_SPEED_M_S = 60.0
 
 
 class LiveOdomNode(Node):
+    """Ego odometry from the vehicle's live CAN topic, published as odom."""
+
     def __init__(self):
+        """Subscribe to the CAN topic and to raw_frames, which paces output."""
         super().__init__('live_odom_node')
 
         self.topic = str(self.declare_parameter('can_topic', '/CAN').value)
@@ -185,7 +189,8 @@ class LiveOdomNode(Node):
         self.create_timer(1.0, self._report)
 
     def on_can(self, msg):
-        """Pull the two signals out and advance the dead-reckoned pose.
+        """
+        Pull the two signals out and advance the dead-reckoned pose.
 
         Callbacks are serialized by the default single-threaded executor, so
         this and on_frame never overlap and no lock is needed. Switching to a
@@ -239,7 +244,8 @@ class LiveOdomNode(Node):
 
     @staticmethod
     def _flagged(msg):
-        """True if the vehicle is telling us not to trust this sample.
+        """
+        Report whether the vehicle is telling us not to trust this sample.
 
         Read defensively: a field that is absent must not take the node down,
         and absence is treated as "no complaint" rather than "bad".
@@ -267,6 +273,7 @@ class LiveOdomNode(Node):
                 f'actually carrying km/h.')
 
     def on_frame(self, msg):
+        """Publish one pose per frame, or nothing if CAN has gone stale."""
         fresh = (self.last_can_t > 0.0
                  and (time.monotonic() - self.last_can_t) <= self.stale_timeout_s)
         if not fresh:
@@ -327,6 +334,7 @@ class LiveOdomNode(Node):
 
 
 def main(args=None):
+    """Run the node until shutdown."""
     rclpy.init(args=args)
     node = LiveOdomNode()
     try:

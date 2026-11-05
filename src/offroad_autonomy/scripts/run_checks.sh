@@ -12,11 +12,11 @@
 # checking. pytest's cache is disabled for the same reason.
 #
 # Usage:
-#   scripts/run_checks.sh                     # uses hatci-vehicle:draft6
-#   IMAGE=hatci-vehicle:draft7 scripts/run_checks.sh
+#   scripts/run_checks.sh                     # uses hatci-vehicle:draft7
+#   IMAGE=hatci-vehicle:draft8 scripts/run_checks.sh
 set -euo pipefail
 
-IMAGE="${IMAGE:-hatci-vehicle:draft6}"
+IMAGE="${IMAGE:-hatci-vehicle:draft7}"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Read the pin from pyproject.toml rather than repeating it here, because a

@@ -1,4 +1,5 @@
-"""Starts the whole pipeline: one source node, then stages 2-6.
+"""
+Starts the whole pipeline: one source node, then stages 2-6.
 
     ros2 launch perception_suite pipeline.launch.py
     ros2 launch perception_suite pipeline.launch.py source:=video video_path:=other.mp4
@@ -105,6 +106,14 @@ def _source(context):
 
 
 def generate_launch_description():
+    """
+    Build the pipeline's launch description.
+
+    Six nodes by default, one of them the visualizer, which visualize:=false
+    leaves out. An odometry node joins when a CAN source is given, and
+    7_controller_node joins with control:=true. The source is chosen with
+    source:=video|camera|bag.
+    """
     config = {'config': LaunchConfiguration('config'), 'model': LaunchConfiguration('model')}
 
     def stage(executable, extra=None, **kwargs):
@@ -152,10 +161,13 @@ def generate_launch_description():
                                           'ground projection confidently wrong rather '
                                           'than obviously broken. Our bench camera '
                                           'presents inverted and needs true'),
-        DeclareLaunchArgument('warmup_frames', default_value='5',
+        DeclareLaunchArgument('warmup_frames', default_value='120',
                               description='Frames discarded after the stream starts. '
-                                          'The first carries torn rows, about 4 per '
-                                          'cent of pixels; it is clean by frame 5'),
+                                          'Torn rows fade over seconds, not frames: '
+                                          'measured on the bench carrier, 0.9 per cent '
+                                          'of pixels are still torn at frame 5 and the '
+                                          'first wholly clean frame is 120, which is '
+                                          '4 seconds at 30 FPS'),
         DeclareLaunchArgument('width', default_value='1280',
                               description='Width the source publishes. Nothing between\n'
                                           'the source and 2_preprocess_node reads the\n'
@@ -285,6 +297,29 @@ def generate_launch_description():
                                           'calls that frame'),
         DeclareLaunchArgument('visualize', default_value='true',
                               description='Open the visualizer window'),
+        DeclareLaunchArgument('control', default_value='false',
+                              description='Run 7_controller_node, which turns the '
+                                          'planner output into a steering and speed '
+                                          'command on /command. Off by default: the '
+                                          'camera and bag tests do not need it, and a '
+                                          'pipeline that starts commanding a vehicle '
+                                          'because someone launched it should be an '
+                                          'explicit choice'),
+        DeclareLaunchArgument('odom_timeout_s', default_value='0.5',
+                              description='How old odometry may be before the\n'
+                                          'controller commands a stop, the\n'
+                                          'planner drops the pose so the BEV\n'
+                                          'grid forgets rather than smearing,\n'
+                                          'and the dashboard zeroes its dials.\n'
+                                          'Only applies once odometry has been\n'
+                                          'seen: a pipeline with no CAN source\n'
+                                          'at all runs on fixed speed_mps'),
+        DeclareLaunchArgument('command_timeout_s', default_value='0.5',
+                              description='How long the dashboard keeps showing\n'
+                                          'the last control command before the\n'
+                                          'dials fall back to zero. A frozen dial\n'
+                                          'reads as live, so a stopped controller\n'
+                                          'has to look like no controller'),
         # First, so a bad config, model, scene or source fails before any
         # stage node starts.
         OpaqueFunction(function=_validated),
@@ -306,10 +341,18 @@ def generate_launch_description():
             # A CAN csv is only useful to the grid planner, so supplying one
             # selects it; the baseline planner ignores ego motion entirely.
             # An explicit planner_mode wins; otherwise a CAN csv selects grid.
+            'odom_timeout_s': LaunchConfiguration('odom_timeout_s'),
             'planner_mode': PythonExpression(
                 ["'", LaunchConfiguration('planner_mode'),
                  "' or ('grid' if '", LaunchConfiguration('can_csv'),
                  "' or '", LaunchConfiguration('can_topic'),
                  "' else '')"])}),
-        stage('6_visualizer_node', condition=IfCondition(LaunchConfiguration('visualize'))),
+        stage('6_visualizer_node', {
+            'command_timeout_s': LaunchConfiguration('command_timeout_s'),
+            'odom_timeout_s': LaunchConfiguration('odom_timeout_s')},
+            condition=IfCondition(LaunchConfiguration('visualize'))),
+        stage('7_controller_node', {
+            'speed_mps': LaunchConfiguration('speed_mps'),
+            'odom_timeout_s': LaunchConfiguration('odom_timeout_s')},
+            condition=IfCondition(LaunchConfiguration('control'))),
     ])

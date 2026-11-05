@@ -1,3 +1,11 @@
+"""
+Stage 3: preprocessed_frames in, road_mask and segmented_frames out.
+
+The inference stage. road_mask carries the mask and its confidence for the
+stages downstream. segmented_frames is the input frame republished unchanged,
+so the dashboard can match a picture to the mask made from it.
+"""
+
 import signal
 import time
 from dataclasses import replace
@@ -16,7 +24,8 @@ from perception_suite.common import LATEST_ONLY, StageTimer, encode_mask, load_p
 
 
 class SegmentationNode(Node):
-    """Stage 3: road segmentation (RoadSegmenter), publishing /road_mask.
+    """
+    Stage 3: road segmentation (RoadSegmenter), publishing /road_mask.
 
     RoadSegmenter takes either a prompted YOLOE-26 model (task="segment") or a
     fine-tuned semantic segmentation model (task="semantic"), which has fixed
@@ -24,6 +33,7 @@ class SegmentationNode(Node):
     """
 
     def __init__(self):
+        """Load the segmentation model and subscribe to preprocessed_frames."""
         super().__init__('segmentation_node')
         config = load_pipeline_config(self)
         # The scene's prompts, from the config's perception.scenes. A semantic
@@ -75,6 +85,7 @@ class SegmentationNode(Node):
         return path
 
     def on_frame(self, msg):
+        """Segment one frame, publishing the mask and the frame it came from."""
         t0 = self.stage_timer.start()
         image = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
         h, w = image.shape[:2]
@@ -89,13 +100,15 @@ class SegmentationNode(Node):
         out.header = msg.header
         self.publisher.publish(out)
         self.frame_publisher.publish(msg)
-        # The model's own forward pass, separately from everything this node
-        # does around it, because that is the number worth optimising.
+        # The whole predict() call, separately from everything this node does
+        # around it, because that is the number worth optimising. It includes
+        # Ultralytics' own pre- and post-processing, not only the forward pass.
         self.stage_timer.done(
             t0, msg.header, {'inference': float(result.inference_time_ms)})
 
 
 def main(args=None):
+    """Run the node until shutdown."""
     rclpy.init(args=args)
     try:
         rclpy.spin(SegmentationNode())

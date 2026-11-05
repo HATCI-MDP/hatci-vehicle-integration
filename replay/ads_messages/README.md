@@ -29,6 +29,10 @@ For bag replay there is no such risk, because the schema came out of the bags be
 **Use HATCI's package for anything touching the vehicle.**
 Then delete this one, or leave it unbuilt.
 
+The image does not enforce this on its own.
+If no other `ads_messages` is visible inside the container, the entrypoint falls back to this one on a live bus and says so in the log.
+A package installed only on the host is not visible inside the container.
+
 ## The five types
 
 | Type | Where it is used |

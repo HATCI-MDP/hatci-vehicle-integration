@@ -258,7 +258,7 @@ TAG=hatci-vehicle:draft8 ./build.sh   # on a board that has hatci-pipeline:v1
 The default tag is `hatci-vehicle:draft7`, and `build.sh` refuses to overwrite a tag that already exists.
 That is deliberate: rebuilding over a tag would replace a verified artifact with an unverified one of the same name, and nothing downstream could tell the difference.
 `draft7` passes its selftest at 29.99 FPS on both `/road_mask` and `/path`.
-It was built from a working tree that was not yet committed, which `build.sh` reports in its own output; the commit it corresponds to has to be recorded here before this is treated as a release build.
+It corresponds to commit `069ce2c`: every file there matches the tree the image was built from, except `HANDOFF.md`, `README.md` and `src/README.md`, which do not go into the image.
 Pass a new `TAG`, or `FORCE=1` to overwrite on purpose.
 
 `build.sh` stages the context from two places.

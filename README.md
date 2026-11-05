@@ -7,8 +7,11 @@ The model weights, the demo clips and the prebuilt workspace are baked into `hat
 
 **Read `OPEN-ITEMS.md` first.** It is what we need confirmed, ordered by what it blocks.
 
+**Running it for the first time?** `QUICKSTART.md` covers a ROS bag and a live camera on one page.
+
 | File | What it is |
 |---|---|
+| `QUICKSTART.md` | One page: load the image, then run it from a ROS bag or a live camera. |
 | `src/` | The pipeline source, all three packages. Start at `src/README.md`. |
 | `configs/` | The run configuration behind every number we have reported. |
 | `OPEN-ITEMS.md` | Everything we need confirmed or supplied, with why each one matters. |
@@ -74,7 +77,7 @@ Any `ros2 launch` argument is appended and wins, for example `./run_vehicle.sh c
 `ros2 launch perception_suite pipeline.launch.py --show-args` inside `shell` lists all of them.
 
 The dashboard draws on the monitor attached to the board, not on the machine you connected from.
-Over a plain ssh session there is no display, so the pipeline detects that and runs headless rather than failing.
+Over ssh, `run_vehicle.sh` falls back to the board's own screen when a desktop session is running there, and runs headless when there is none.
 For a window on your own machine, connect with `ssh -X`.
 
 #### 1. A recorded clip, no vehicle data

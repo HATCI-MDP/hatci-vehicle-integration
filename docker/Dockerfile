@@ -58,7 +58,19 @@ RUN apt-get update \
       python3-gi=3.42.1-0ubuntu1 \
       gir1.2-gstreamer-1.0=1.20.3-0ubuntu1.1 \
       gir1.2-gst-plugins-base-1.0=1.20.1-1ubuntu0.7 \
+      ros-humble-can-msgs=2.0.0-4jammy.20260907.214155 \
+      ros-humble-ros2-socketcan-msgs=1.4.0-1jammy.20260909.220140 \
+      ros-humble-ros2-socketcan=1.4.0-1jammy.20260909.220441 \
  && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir --no-deps \
+      cantools==45.1.2 \
+      python-can==4.6.1 \
+      bitstruct==8.24.0 \
+      textparser==0.26.2 \
+      argparse-addons==0.12.0 \
+      crccheck==1.3.1 \
+      wrapt==1.17.3
 
 # ---------------------------------------------------------------------------
 # 1. The bench tree: configs, models, overlays, helper scripts, demo clips.

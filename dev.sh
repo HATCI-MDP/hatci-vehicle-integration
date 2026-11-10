@@ -33,7 +33,7 @@ set -eo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NAME="${DEV_CONTAINER:-hatci-dev}"
-BASE_IMAGE="${BASE_IMAGE:-hatci-vehicle:draft7}"
+BASE_IMAGE="${BASE_IMAGE:-hatci-vehicle:draft8}"
 MOUNT_ROOT="${MOUNT_ROOT:-/mnt/nova_ssd/mdp}"
 RC="$HERE/docker/dev_bashrc"
 CMD="${1:-shell}"

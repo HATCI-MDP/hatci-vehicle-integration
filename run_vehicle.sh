@@ -22,10 +22,28 @@ set -eo pipefail
 IMAGE="${IMAGE:-hatci-vehicle:draft7}"
 MODE="${1:-clip1}"
 
+# First run on a board: if the image is not in Docker yet, load it from the
+# tarball next to this script.
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-  echo "run_vehicle: image $IMAGE not found. Load it with:" >&2
-  echo "  gunzip -c hatci-vehicle-draft7.tar.gz | docker load" >&2
-  exit 1
+  HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  TAR="${IMAGE_TAR:-$HERE/hatci-vehicle-${IMAGE##*:}.tar.gz}"
+  if [[ ! -f "$TAR" ]]; then
+    echo "run_vehicle: image $IMAGE not found and no tarball at $TAR." >&2
+    echo "  Put the tarball there, or set IMAGE_TAR=/path/to/file.tar.gz" >&2
+    exit 1
+  fi
+  echo "run_vehicle: image $IMAGE not in Docker; loading $TAR (one-time, a few minutes)..." >&2
+  if command -v pv >/dev/null 2>&1; then
+    pv "$TAR" | gunzip -c | docker load >&2
+  else
+    gunzip -c "$TAR" | docker load >&2
+  fi
+  if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    echo "run_vehicle: load finished but $IMAGE still missing. The tarball holds:" >&2
+    docker images --format '  {{.Repository}}:{{.Tag}}' | grep -i hatci >&2 || true
+    echo "  Retag it (docker tag <that> $IMAGE) or run with IMAGE=<that tag>." >&2
+    exit 1
+  fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -84,31 +102,69 @@ if [ "$MODE" = "camera" ]; then
   CAMERA=(-v /dev:/dev --privileged)
   echo "run_vehicle: camera mode, relaxing device rules for the Tegra capture path" >&2
 
-  # NRU-230V: one IMX490 on Port#1. Override with e.g. NRU_PORT_MAP="1=imx490 5=imx490".
+  # NRU-230V camera: an IMX490 on Port#0. Override if the hardware changes:
+  #   CAMERA_MODEL=imx490|isx031|imx390|isx021    (default imx490)
+  #   CAMERA_PORT=0..7                            (default 0)
+  # Everything else follows from these: the driver is set up for that sensor on
+  # that port, and the matching /dev/videoN and capture size are passed to the
+  # camera node. Arguments appended to this command still win.
+  CAMERA_MODEL="${CAMERA_MODEL:-imx490}"
+  PORT="${CAMERA_PORT:-0}"
+  case "$CAMERA_MODEL" in
+    imx490) CAM_W=2880; CAM_H=1860 ;;
+    isx031) CAM_W=1920; CAM_H=1536 ;;
+    imx390) CAM_W=1920; CAM_H=1080 ;;
+    isx021) CAM_W=1920; CAM_H=1280 ;;
+    *) echo "run_vehicle: unknown CAMERA_MODEL '$CAMERA_MODEL'" >&2; exit 1 ;;
+  esac
+  [[ "$PORT" =~ ^[0-7]$ ]] || { echo "run_vehicle: CAMERA_PORT must be 0-7" >&2; exit 1; }
   NRU_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/NRU_Scripts/NRU-230V"
-  NRU_PORT_MAP="${NRU_PORT_MAP:-1=imx490}"
+  NRU_CAM_PORT="$NRU_DIR/nru-cam-port"
+  LIVE=/run/nru-cam-port.live
+  for f in init_8xIMXCam.sh nru-cam-port nv_nru_mix230.ko; do
+    [ -f "$NRU_DIR/$f" ] || { echo "run_vehicle: missing $NRU_DIR/$f" >&2; exit 1; }
+  done
+  chmod +x "$NRU_DIR/init_8xIMXCam.sh" "$NRU_CAM_PORT"
 
-  # /sys check, not lsmod|grep: grep -q closing the pipe early trips pipefail.
+  # Driver up? /sys check, not lsmod|grep: grep -q closing the pipe early trips pipefail.
   if [ -d /sys/module/nv_nru_mix230 ] && compgen -G "/dev/nru-port*" >/dev/null; then
     echo "run_vehicle: nv_nru_mix230 loaded, skipping camera init" >&2
   else
-    for f in init_8xIMXCam.sh nru-cam-port nv_nru_mix230.ko; do
-      [ -f "$NRU_DIR/$f" ] || { echo "run_vehicle: missing $NRU_DIR/$f" >&2; exit 1; }
-    done
-    chmod +x "$NRU_DIR/init_8xIMXCam.sh" "$NRU_DIR/nru-cam-port"
-    echo "run_vehicle: initializing NRU-230V cameras ($NRU_PORT_MAP)" >&2
+    echo "run_vehicle: initializing NRU-230V cameras" >&2
     (cd "$NRU_DIR" && sudo ./init_8xIMXCam.sh) \
       || { echo "run_vehicle: init_8xIMXCam.sh failed" >&2; exit 1; }
-    # shellcheck disable=SC2086
-    sudo "$NRU_DIR/nru-cam-port" set $NRU_PORT_MAP \
-      || { echo "run_vehicle: nru-cam-port set failed" >&2; exit 1; }
+    sudo "$NRU_CAM_PORT" load \
+      || { echo "run_vehicle: nru-cam-port load failed" >&2; exit 1; }
   fi
 
+  HAVE_SIZE="$(cut -d, -f$((PORT+1)) /sys/module/nv_nru_mix230/parameters/port_size 2>/dev/null || true)"
+  if [ "$HAVE_SIZE" != "${CAM_W}x${CAM_H}" ]; then
+    echo "run_vehicle: Port#$PORT is set to '${HAVE_SIZE:-?}', setting it to $CAMERA_MODEL" >&2
+    sudo "$NRU_CAM_PORT" set "$PORT=$CAMERA_MODEL" \
+      || { echo "run_vehicle: nru-cam-port set failed" >&2; exit 1; }
+  fi
+  if ! grep -qw "$PORT" "$LIVE" 2>/dev/null && [ "${NRU_IGNORE_SIGNAL:-0}" != 1 ]; then
+    echo "run_vehicle: Port#$PORT has no video lock (locked: $(cat "$LIVE" 2>/dev/null || echo none))." >&2
+    echo "  Check power and cable. This hardware does not hot-plug: attach the" >&2
+    echo "  camera, then reboot the board. NRU_IGNORE_SIGNAL=1 tries anyway." >&2
+    exit 1
+  fi
+
+  # /dev/nru-portN is Port#N; the node wants the /dev/videoN with the same device number.
+  NODE_RDEV="$(stat -c '%t:%T' "/dev/nru-port$PORT")"
+  VIDEO_IDX=""
+  for v in /dev/video[0-9]*; do
+    [ "$(stat -c '%t:%T' "$v")" = "$NODE_RDEV" ] && { VIDEO_IDX="${v#/dev/video}"; break; }
+  done
+  [ -n "$VIDEO_IDX" ] || { echo "run_vehicle: no /dev/video* matches /dev/nru-port$PORT" >&2; exit 1; }
+  echo "run_vehicle: $CAMERA_MODEL on Port#$PORT = /dev/video$VIDEO_IDX (${CAM_W}x${CAM_H})" >&2
+  set -- "$MODE" "camera_index:=$VIDEO_IDX" "capture_width:=$CAM_W" "capture_height:=$CAM_H" "${@:2}"
+
   # Lets the camera node see which ports have video lock (written by nru-cam-port).
-  if [ -f /run/nru-cam-port.live ]; then
-    CAMERA+=(-v /run/nru-cam-port.live:/run/nru-cam-port.live:ro)
+  if [ -f "$LIVE" ]; then
+    CAMERA+=(-v "$LIVE:$LIVE:ro")
   else
-    echo "run_vehicle: WARNING: /run/nru-cam-port.live missing, camera node cannot check signal" >&2
+    echo "run_vehicle: WARNING: $LIVE missing, camera node cannot check signal" >&2
   fi
 fi
 

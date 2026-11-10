@@ -1,0 +1,30 @@
+#!/bin/bash
+# nru-cam-show - show all NRU-230V ports on the monitor, 4x2 grid of 480x360, tile N = Port#N.
+# Run after: nru-cam-port set ... (or nru-cam-port load). Uses /dev/nru-portN.
+# Only ports with MAX9296 video lock are opened. Other tiles show a black card.
+# Stock image has no nvidia-l4t-gstreamer, so this is CPU only: UYVY end to end, nearest-neighbour
+# scaling, one queue per tile. Every tile runs at 30 fps (a slower tile slows the whole grid).
+export DISPLAY=${DISPLAY:-:0}
+CONF="${CONF:-/etc/nru-cam-port.conf}"
+declare -A CAM SZ
+SIZES="$(cat /sys/module/nv_nru_mix230/parameters/port_size 2>/dev/null)"
+[ -n "$SIZES" ] || { echo "ERROR: nv_nru_mix230 is not loaded. Run: sudo nru-cam-port load"; exit 1; }
+for n in 0 1 2 3 4 5 6 7; do
+  SZ[$n]="$(echo "$SIZES" | cut -d, -f$((n+1)))"
+  CAM[$n]="$(grep -E "^$n=" "$CONF" 2>/dev/null | cut -d= -f2)"
+done
+# Ports with signal: written by nru-cam-port at load time (reading i2c needs root)
+LIVE="${LIVE:-$(cat /run/nru-cam-port.live 2>/dev/null)}"
+echo "ports with signal:${LIVE:- none}"
+P="compositor name=m background=black"
+for n in 0 1 2 3 4 5 6 7; do P="$P sink_$n::xpos=$(( (n%4)*480 )) sink_$n::ypos=$(( (n/4)*360 ))"; done
+P="$P ! video/x-raw,format=UYVY,width=1920,height=720,framerate=30/1 ! queue max-size-buffers=2 ! fpsdisplaysink name=fps video-sink=xvimagesink text-overlay=true sync=false"
+for n in 0 1 2 3 4 5 6 7; do
+  t="Port#$n  AC-${CAM[$n]^^}  ${SZ[$n]}"
+  if echo " $LIVE " | grep -q " $n "; then
+    P="$P v4l2src device=/dev/nru-port$n ! queue max-size-buffers=2 leaky=downstream ! videoscale method=nearest-neighbour ! video/x-raw,format=UYVY,width=480,height=360 ! textoverlay text=\"$t\" valignment=top halignment=left font-desc=\"Sans Bold 14\" shaded-background=true ! timeoverlay valignment=bottom halignment=right font-desc=\"Mono 12\" shaded-background=true ! queue max-size-buffers=2 leaky=downstream ! m.sink_$n"
+  else
+    P="$P videotestsrc pattern=black is-live=true ! video/x-raw,format=UYVY,width=480,height=360,framerate=30/1 ! textoverlay text=\"Port#$n  no signal (not opened)\" valignment=center halignment=center font-desc=\"Sans 14\" ! m.sink_$n"
+  fi
+done
+eval gst-launch-1.0 -v $P

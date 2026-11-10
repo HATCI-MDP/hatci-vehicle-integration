@@ -83,6 +83,33 @@ CAMERA=()
 if [ "$MODE" = "camera" ]; then
   CAMERA=(-v /dev:/dev --privileged)
   echo "run_vehicle: camera mode, relaxing device rules for the Tegra capture path" >&2
+
+  # NRU-230V: one IMX490 on Port#1. Override with e.g. NRU_PORT_MAP="1=imx490 5=imx490".
+  NRU_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/NRU_Scripts/NRU-230V"
+  NRU_PORT_MAP="${NRU_PORT_MAP:-1=imx490}"
+
+  # /sys check, not lsmod|grep: grep -q closing the pipe early trips pipefail.
+  if [ -d /sys/module/nv_nru_mix230 ] && compgen -G "/dev/nru-port*" >/dev/null; then
+    echo "run_vehicle: nv_nru_mix230 loaded, skipping camera init" >&2
+  else
+    for f in init_8xIMXCam.sh nru-cam-port nv_nru_mix230.ko; do
+      [ -f "$NRU_DIR/$f" ] || { echo "run_vehicle: missing $NRU_DIR/$f" >&2; exit 1; }
+    done
+    chmod +x "$NRU_DIR/init_8xIMXCam.sh" "$NRU_DIR/nru-cam-port"
+    echo "run_vehicle: initializing NRU-230V cameras ($NRU_PORT_MAP)" >&2
+    (cd "$NRU_DIR" && sudo ./init_8xIMXCam.sh) \
+      || { echo "run_vehicle: init_8xIMXCam.sh failed" >&2; exit 1; }
+    # shellcheck disable=SC2086
+    sudo "$NRU_DIR/nru-cam-port" set $NRU_PORT_MAP \
+      || { echo "run_vehicle: nru-cam-port set failed" >&2; exit 1; }
+  fi
+
+  # Lets the camera node see which ports have video lock (written by nru-cam-port).
+  if [ -f /run/nru-cam-port.live ]; then
+    CAMERA+=(-v /run/nru-cam-port.live:/run/nru-cam-port.live:ro)
+  else
+    echo "run_vehicle: WARNING: /run/nru-cam-port.live missing, camera node cannot check signal" >&2
+  fi
 fi
 
 # ---------------------------------------------------------------------------

@@ -6,6 +6,7 @@ source they are fed by. Capture runs on its own thread and the timer publishes
 the newest frame, so a slow consumer drops frames rather than queueing them.
 """
 
+import os
 import signal
 import threading
 import time
@@ -180,15 +181,28 @@ class CameraPublisher(Node):
 def main(args=None):
     """Run the camera source until shutdown."""
     rclpy.init(args=args)
+    node = None
     try:
-        rclpy.spin(CameraPublisher())
+        node = CameraPublisher()
+        rclpy.spin(node)
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         # Under launch, Ctrl+C arrives twice (terminal and launch); the second
         # must not interrupt teardown or interpreter exit.
         signal.signal(signal.SIGINT, signal.SIG_IGN)
+        # Stop the capture thread and release the camera BEFORE the interpreter
+        # exits. Left running, the daemon thread is still inside cap.read()
+        # during finalization.
+        reader = getattr(node, "_reader", None)
+        if node is not None:
+            node.destroy_node()
         rclpy.try_shutdown()
+        if reader is not None and reader.is_alive():
+            # The sensor stalled and read() never returned within the join
+            # timeout. Exiting normally would abort as above, so skip
+            # finalization; the camera was already released.
+            os._exit(0)
 
 
 if __name__ == "__main__":

@@ -102,62 +102,12 @@ if [ "$MODE" = "camera" ]; then
   CAMERA=(-v /dev:/dev --privileged)
   echo "run_vehicle: camera mode, relaxing device rules for the Tegra capture path" >&2
 
-  # NRU-230V camera: an IMX490 on Port#0. Override if the hardware changes:
-  #   CAMERA_MODEL=imx490|isx031|imx390|isx021    (default imx490)
-  #   CAMERA_PORT=0..7                            (default 0)
-  # Everything else follows from these: the driver is set up for that sensor on
-  # that port, and the matching /dev/videoN and capture size are passed to the
-  # camera node. Arguments appended to this command still win.
-  CAMERA_MODEL="${CAMERA_MODEL:-imx490}"
-  PORT="${CAMERA_PORT:-0}"
-  case "$CAMERA_MODEL" in
-    imx490) CAM_W=2880; CAM_H=1860 ;;
-    isx031) CAM_W=1920; CAM_H=1536 ;;
-    imx390) CAM_W=1920; CAM_H=1080 ;;
-    isx021) CAM_W=1920; CAM_H=1280 ;;
-    *) echo "run_vehicle: unknown CAMERA_MODEL '$CAMERA_MODEL'" >&2; exit 1 ;;
-  esac
-  [[ "$PORT" =~ ^[0-7]$ ]] || { echo "run_vehicle: CAMERA_PORT must be 0-7" >&2; exit 1; }
-  NRU_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/NRU_Scripts/NRU-230V"
-  NRU_CAM_PORT="$NRU_DIR/nru-cam-port"
-  LIVE=/run/nru-cam-port.live
-  for f in init_8xIMXCam.sh nru-cam-port nv_nru_mix230.ko; do
-    [ -f "$NRU_DIR/$f" ] || { echo "run_vehicle: missing $NRU_DIR/$f" >&2; exit 1; }
-  done
-  chmod +x "$NRU_DIR/init_8xIMXCam.sh" "$NRU_CAM_PORT"
-
-  # Driver up? /sys check, not lsmod|grep: grep -q closing the pipe early trips pipefail.
-  if [ -d /sys/module/nv_nru_mix230 ] && compgen -G "/dev/nru-port*" >/dev/null; then
-    echo "run_vehicle: nv_nru_mix230 loaded, skipping camera init" >&2
-  else
-    echo "run_vehicle: initializing NRU-230V cameras" >&2
-    (cd "$NRU_DIR" && sudo ./init_8xIMXCam.sh) \
-      || { echo "run_vehicle: init_8xIMXCam.sh failed" >&2; exit 1; }
-    sudo "$NRU_CAM_PORT" load \
-      || { echo "run_vehicle: nru-cam-port load failed" >&2; exit 1; }
-  fi
-
-  HAVE_SIZE="$(cut -d, -f$((PORT+1)) /sys/module/nv_nru_mix230/parameters/port_size 2>/dev/null || true)"
-  if [ "$HAVE_SIZE" != "${CAM_W}x${CAM_H}" ]; then
-    echo "run_vehicle: Port#$PORT is set to '${HAVE_SIZE:-?}', setting it to $CAMERA_MODEL" >&2
-    sudo "$NRU_CAM_PORT" set "$PORT=$CAMERA_MODEL" \
-      || { echo "run_vehicle: nru-cam-port set failed" >&2; exit 1; }
-  fi
-  if ! grep -qw "$PORT" "$LIVE" 2>/dev/null && [ "${NRU_IGNORE_SIGNAL:-0}" != 1 ]; then
-    echo "run_vehicle: Port#$PORT has no video lock (locked: $(cat "$LIVE" 2>/dev/null || echo none))." >&2
-    echo "  Check power and cable. This hardware does not hot-plug: attach the" >&2
-    echo "  camera, then reboot the board. NRU_IGNORE_SIGNAL=1 tries anyway." >&2
-    exit 1
-  fi
-
-  # /dev/nru-portN is Port#N; the node wants the /dev/videoN with the same device number.
-  NODE_RDEV="$(stat -c '%t:%T' "/dev/nru-port$PORT")"
-  VIDEO_IDX=""
-  for v in /dev/video[0-9]*; do
-    [ "$(stat -c '%t:%T' "$v")" = "$NODE_RDEV" ] && { VIDEO_IDX="${v#/dev/video}"; break; }
-  done
-  [ -n "$VIDEO_IDX" ] || { echo "run_vehicle: no /dev/video* matches /dev/nru-port$PORT" >&2; exit 1; }
-  echo "run_vehicle: $CAMERA_MODEL on Port#$PORT = /dev/video$VIDEO_IDX (${CAM_W}x${CAM_H})" >&2
+  # NRU-230V camera: an IMX490 on Port#0 by default. Override with
+  # CAMERA_MODEL=... / CAMERA_PORT=N. See scripts/nru_camera.sh.
+  # shellcheck source=scripts/nru_camera.sh
+  source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/scripts/nru_camera.sh"
+  NRU_TAG=run_vehicle nru_camera_setup || exit 1
+  LIVE="$NRU_LIVE"
 
   set -- "$MODE" "camera_index:=$VIDEO_IDX" "capture_width:=$CAM_W" "capture_height:=$CAM_H" \
          "rotate_180:=${ROTATE_180:-false}" "${@:2}"

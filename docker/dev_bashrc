@@ -1,0 +1,54 @@
+# shellcheck shell=bash
+# rc file for the dev container (dev.sh runs `bash --rcfile` with this).
+#
+#   hatci_ws [dir]          show / switch the active workspace (default: this repo)
+#   hatci_build [args]      colcon build --symlink-install in the active workspace
+#   hatci_run <mode> [...]  launch from the active workspace, same modes as the
+#                           image: camera [can], clip1..3 [can], replay <bag>,
+#                           selftest. Any ros2 launch argument appended wins.
+#
+# The workspace is a plain colcon workspace: <dir>/src/<packages>. Make another
+# one anywhere under /mnt/nova_ssd/mdp (e.g. copy src/ there), then
+#   hatci_ws /mnt/nova_ssd/mdp/my_ws && hatci_build && hatci_run camera
+
+[ -f /etc/bash.bashrc ] && source /etc/bash.bashrc
+source /opt/ros/humble/setup.bash
+
+HATCI_REPO="${HATCI_REPO:-/mnt/nova_ssd/mdp/hatci-vehicle-integration}"
+export HATCI_WS="${HATCI_WS:-$HATCI_REPO}"
+export YOLO_CONFIG_DIR="${YOLO_CONFIG_DIR:-/tmp/Ultralytics}"
+
+_hatci_source () {
+  if [ -f "$HATCI_WS/install/setup.bash" ]; then
+    source "$HATCI_WS/install/setup.bash"
+  else
+    echo "hatci: $HATCI_WS is not built yet; run hatci_build" >&2
+  fi
+}
+
+hatci_ws () {
+  if [ -n "${1:-}" ]; then
+    [ -d "$1/src" ] || { echo "hatci: $1/src not found (a workspace is <dir>/src/<packages>)" >&2; return 1; }
+    HATCI_WS="$(cd "$1" && pwd)"
+    # A fresh shell environment, so the previous workspace's packages do not linger.
+    exec env HATCI_WS="$HATCI_WS" bash --rcfile "$HATCI_REPO/docker/dev_bashrc"
+  fi
+  echo "workspace: $HATCI_WS"
+}
+
+hatci_build () {
+  ( cd "$HATCI_WS" && colcon build --symlink-install "$@" ) && _hatci_source
+}
+
+hatci_run () {
+  [ -f "$HATCI_WS/install/setup.bash" ] || { echo "hatci: build first: hatci_build" >&2; return 1; }
+  WS="$HATCI_WS" bash "$HATCI_REPO/docker/entrypoint.sh" "$@"
+}
+
+_hatci_source
+cd "$HATCI_WS" 2>/dev/null || true
+PS1='(hatci-dev) \w \$ '
+echo "hatci-dev: workspace $HATCI_WS"
+echo "  hatci_build              colcon build --symlink-install"
+echo "  hatci_run camera         launch (also: clip1, replay <bag>, selftest, ...)"
+echo "  hatci_ws <dir>           switch to another workspace"

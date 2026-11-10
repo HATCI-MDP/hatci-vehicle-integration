@@ -58,8 +58,24 @@
 set -eo pipefail
 
 source /opt/ros/humble/setup.bash
-source /opt/ws/install/setup.bash
 
+# WS picks the colcon workspace to run. The image's own prebuilt one is the
+# default; dev.sh points it at a mounted checkout built with
+# `colcon build --symlink-install`, so source and config edits apply on the
+# next launch without rebuilding the image.
+WS="${WS:-/opt/ws}"
+if [ ! -f "$WS/install/setup.bash" ]; then
+  echo "entrypoint: $WS/install/setup.bash not found. Build that workspace first:" >&2
+  echo "entrypoint:   cd $WS && colcon build --symlink-install" >&2
+  exit 1
+fi
+source "$WS/install/setup.bash"
+
+# A workspace that carries its own configs/ uses them, so a config edit there
+# is what runs. CONFIG=... still overrides.
+if [ -z "${CONFIG:-}" ] && [ -f "$WS/configs/tmp_26s_demo.yaml" ]; then
+  CONFIG="$WS/configs/tmp_26s_demo.yaml"
+fi
 CONFIG="${CONFIG:-/bench/configs/tmp_26s_demo.yaml}"
 CLIPS=/bench/data/clips
 CANDIR=/bench/data/can
@@ -206,9 +222,27 @@ case "$MODE" in
     # NV16 is not a preference. The device advertises UYVY first and OpenCV's
     # own V4L2 backend mis-decodes every format it offers; only NV16 pulled
     # through a GStreamer pipeline produces a correct frame.
+    #
+    # NRU-230V: with CAMERA_PORT set (dev.sh sets it), the /dev/videoN is
+    # looked up from /dev/nru-portN at launch, because the N in videoN can
+    # change when the driver is reloaded. CAMERA_MODEL sets the capture size.
+    if [ -z "${CAMERA_INDEX:-}" ] && [ -n "${CAMERA_PORT:-}" ] && [ -e "/dev/nru-port$CAMERA_PORT" ]; then
+      RDEV="$(stat -c '%t:%T' "/dev/nru-port$CAMERA_PORT")"
+      for v in /dev/video[0-9]*; do
+        [ "$(stat -c '%t:%T' "$v")" = "$RDEV" ] && { CAMERA_INDEX="${v#/dev/video}"; break; }
+      done
+      echo "entrypoint: Port#$CAMERA_PORT = /dev/video${CAMERA_INDEX:-?}" >&2
+    fi
+    SIZE_ARGS=()
+    case "${CAMERA_MODEL:-}" in
+      imx490) SIZE_ARGS=(capture_width:=2880 capture_height:=1860) ;;
+      isx031) SIZE_ARGS=(capture_width:=1920 capture_height:=1536) ;;
+      imx390) SIZE_ARGS=(capture_width:=1920 capture_height:=1080) ;;
+      isx021) SIZE_ARGS=(capture_width:=1920 capture_height:=1280) ;;
+    esac
     SOURCE_ARGS=(source:=camera "camera_index:=${CAMERA_INDEX:-0}"
                  "rotate_180:=${ROTATE_180:-true}" pixel_format:=NV16
-                 camera_fps:=30.0 width:=640)
+                 camera_fps:=30.0 width:=640 ${SIZE_ARGS[@]+"${SIZE_ARGS[@]}"})
     if [ "$WANT_CAN" = 1 ]; then
       if ! ensure_ads_messages; then
         echo "entrypoint: live CAN needs the ads_messages package and none was" >&2

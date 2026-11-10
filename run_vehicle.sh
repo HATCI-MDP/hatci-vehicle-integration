@@ -158,7 +158,9 @@ if [ "$MODE" = "camera" ]; then
   done
   [ -n "$VIDEO_IDX" ] || { echo "run_vehicle: no /dev/video* matches /dev/nru-port$PORT" >&2; exit 1; }
   echo "run_vehicle: $CAMERA_MODEL on Port#$PORT = /dev/video$VIDEO_IDX (${CAM_W}x${CAM_H})" >&2
-  set -- "$MODE" "camera_index:=$VIDEO_IDX" "capture_width:=$CAM_W" "capture_height:=$CAM_H" "${@:2}"
+
+  set -- "$MODE" "camera_index:=$VIDEO_IDX" "capture_width:=$CAM_W" "capture_height:=$CAM_H" \
+         "rotate_180:=${ROTATE_180:-false}" "${@:2}"
 
   # Lets the camera node see which ports have video lock (written by nru-cam-port).
   if [ -f "$LIVE" ]; then

@@ -19,7 +19,7 @@ CTX="${CTX:-/home/nvidia/handoff/ctx}"
 TAG="${TAG:-hatci-vehicle:draft7}"
 
 for d in "$REPO/src/perception_suite" "$REPO/src/perception_suite_msgs" \
-         "$REPO/src/offroad_autonomy" "$BENCH/models"; do
+         "$REPO/src/ads_messages" "$REPO/src/offroad_autonomy" "$BENCH/models"; do
   [ -d "$d" ] || { echo "build: missing $d" >&2; exit 1; }
 done
 
@@ -51,20 +51,10 @@ cp -a "$BENCH/configs"  "$CTX/bench/configs"
 cp -a "$BENCH/scripts"  "$CTX/bench/scripts"
 cp -a "$BENCH/overlays" "$CTX/bench/overlays"
 
-# The three packages, from the repo. Paths match the Dockerfile's COPY lines.
-# perception_suite_msgs is not optional: perception_suite imports it at module
-# scope, and colcon still reports a clean build without it because an
-# ament_python package is never checked for its imports. Leaving it out of the
-# context builds an image that only fails at launch.
 cp -a "$REPO/src/perception_suite"      "$CTX/src/perception_suite"
 cp -a "$REPO/src/perception_suite_msgs" "$CTX/src/perception_suite_msgs"
+cp -a "$REPO/src/ads_messages"          "$CTX/src/ads_messages"
 cp -a "$REPO/src/offroad_autonomy"      "$CTX/src/offroad_autonomy"
-
-# The replay-only ads_messages reconstruction. Staged separately and built into
-# its own overlay, never into the pipeline workspace: ROS 2 Humble matches
-# publisher to subscriber on type NAME alone, so ours and HATCI's real package
-# are indistinguishable at runtime and must never be live together.
-cp -a "$REPO/replay"                "$CTX/replay"
 
 # Big trees: real copies. Hardlinks would be free, but most of these files are
 # root-owned and /proc/sys/fs/protected_hardlinks forbids linking a file you do

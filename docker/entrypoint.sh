@@ -79,7 +79,6 @@ fi
 CONFIG="${CONFIG:-/bench/configs/tmp_26s_demo.yaml}"
 CLIPS=/bench/data/clips
 CANDIR=/bench/data/can
-REPLAY_WS=/opt/replay_ws/install/setup.bash
 
 IMAGE_TOPIC="${IMAGE_TOPIC:-/image_processing/image_compressed}"
 INFO_TOPIC="${IMAGE_TOPIC%/*}/camera_info"
@@ -178,26 +177,11 @@ done
 set -- ${ARGS[@]+"${ARGS[@]}"}
 
 # ---------------------------------------------------------------------------
-# ads_messages. Prefer whatever is already on the system, which on the vehicle
-# means HATCI's own package. Fall back to our reconstruction, which is correct
-# for replaying their bags and is NOT what should decode a live bus: Humble
-# matches publisher to subscriber on type name alone, with no structural check,
-# so a version skew against ours would decode to silent garbage.
+# ads_messages: HATCI's message package, the types their CAN node publishes on
+# /CAN.
 # ---------------------------------------------------------------------------
 ensure_ads_messages () {
-  if ros2 pkg prefix ads_messages >/dev/null 2>&1; then
-    echo "entrypoint: ads_messages already present; using that one." >&2
-    return 0
-  fi
-  if [ -f "$REPLAY_WS" ]; then
-    source "$REPLAY_WS"
-    echo "entrypoint: using OUR reconstructed ads_messages ($REPLAY_WS)." >&2
-    echo "entrypoint:   Rebuilt from the schema embedded in HATCI's bags, so it" >&2
-    echo "entrypoint:   is correct for replaying those. For a LIVE bus, install" >&2
-    echo "entrypoint:   HATCI's package instead." >&2
-    return 0
-  fi
-  return 1
+  ros2 pkg prefix ads_messages >/dev/null 2>&1
 }
 
 # ---------------------------------------------------------------------------
@@ -245,9 +229,9 @@ case "$MODE" in
                  camera_fps:=30.0 width:=640 ${SIZE_ARGS[@]+"${SIZE_ARGS[@]}"})
     if [ "$WANT_CAN" = 1 ]; then
       if ! ensure_ads_messages; then
-        echo "entrypoint: live CAN needs the ads_messages package and none was" >&2
-        echo "entrypoint:   found. Install HATCI's, or rebuild this image with" >&2
-        echo "entrypoint:   replay/ staged. Continuing WITHOUT odometry." >&2
+        echo "entrypoint: live CAN needs ads_messages and $WS was built without" >&2
+        echo "entrypoint:   it. Rebuild the workspace with src/ads_messages in it." >&2
+        echo "entrypoint:   Continuing WITHOUT odometry." >&2
         WANT_CAN=0
       else
         CAN_ARGS=("can_topic:=${CAN_TOPIC:-/CAN}")
@@ -259,13 +243,15 @@ case "$MODE" in
     SOURCE_ARGS=(source:=bag "bag_path:=$BAG_PATH" width:=640)
     if [ "$WANT_CAN" = 1 ]; then
       if ! ensure_ads_messages; then
-        echo "entrypoint: cannot deserialize /CAN without ads_messages." >&2
+        echo "entrypoint: cannot replay /CAN: $WS was built without ads_messages." >&2
+        echo "entrypoint:   Rebuild the workspace with src/ads_messages in it." >&2
         echo "entrypoint:   Replaying images only; baseline planner." >&2
         WANT_CAN=0
       fi
     fi
     if [ "$WANT_CAN" = 1 ]; then
-      SOURCE_ARGS+=("bag_topics:=$IMAGE_TOPIC $INFO_TOPIC /CAN /vehicle_config")
+
+      SOURCE_ARGS+=("bag_topics:=$IMAGE_TOPIC $INFO_TOPIC /CAN")
       CAN_ARGS=("can_topic:=${CAN_TOPIC:-/CAN}")
       echo "entrypoint: replaying $BAG_PATH with its own CAN; BEV grid planner" >&2
     else

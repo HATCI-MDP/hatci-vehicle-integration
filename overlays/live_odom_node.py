@@ -10,12 +10,8 @@ configuration this project reports on - 26s segmentation plus the BEV grid -
 has only ever run against recorded odometry. This node is the live
 replacement.
 
-It subscribes to the same topic the bags recorded, on the ASSUMPTION that the
-node publishing /CAN runs on the live vehicle and not only in the recording
-rig. That assumption is ours and is not yet confirmed; it is item 1.1 in
-OPEN-ITEMS.md. If it holds there is no DBC to decode. If /CAN turns out to
-exist only in the recording setup, this node needs a raw socketcan reader and
-a DBC instead, and only the input half below changes.
+It subscribes to /CAN, which HATCI's CAN node publishes on the vehicle as
+ads_messages/msg/CANMsg.
 The two signals come straight off the message, exactly as extract_can.py takes
 them out of the bag:
 
@@ -101,23 +97,14 @@ import signal
 import time
 
 import rclpy
+from ads_messages.msg import CANMsg
 from geometry_msgs.msg import Quaternion
 from nav_msgs.msg import Odometry
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
-from rosidl_runtime_py.utilities import get_message
 from sensor_msgs.msg import Image
 
 from perception_suite.common import EXTERNAL_LATEST, LATEST_ONLY
-
-# The type is resolved at runtime rather than imported, so this module still
-# imports on a board where ads_messages is not built. That matters because
-# pipeline.launch.py brings every stage up together: an ImportError here would
-# take down the whole pipeline instead of just leaving the grid without
-# odometry. The schema recovered from the Oct 2026 bags is
-# ads_messages/msg/CANMsg, whose fields are spd_mps, spd_fl_mps ... and
-# imu (ads_messages/CANImu, which wraps a sensor_msgs/Imu).
-DEFAULT_CAN_TYPE = 'ads_messages/msg/CANMsg'
 
 # Sanity bounds, used only to warn once. They exist because the single most
 # likely integration mistake is a unit mismatch, and it is silent: a yaw rate
@@ -137,7 +124,6 @@ class LiveOdomNode(Node):
         super().__init__('live_odom_node')
 
         self.topic = str(self.declare_parameter('can_topic', '/CAN').value)
-        type_name = str(self.declare_parameter('can_msg_type', DEFAULT_CAN_TYPE).value)
         # How long a CAN sample stays usable. At 30 Hz, 0.5 s is 15 missed
         # messages: comfortably past "a dropped frame" and well short of
         # "the planner has been steering on a stale pose for a second".
@@ -160,27 +146,11 @@ class LiveOdomNode(Node):
         self.pub = self.create_publisher(Odometry, 'odom', LATEST_ONLY)
         self.create_subscription(Image, 'raw_frames', self.on_frame, LATEST_ONLY)
 
-        try:
-            can_type = get_message(type_name)
-        except (ImportError, ValueError, AttributeError) as exc:
-            # Not fatal on purpose. The pipeline should still come up and run
-            # the baseline planner rather than refusing to start; a pipeline
-            # that will not launch in the vehicle is harder to diagnose than
-            # one that launches and says why it is quiet.
-            self.get_logger().error(
-                f'live_odom_node: cannot resolve message type {type_name!r}: {exc}. '
-                f'The ads_messages package has to be on AMENT_PREFIX_PATH inside '
-                f'the container. Publishing nothing; run with '
-                f'planner_mode:=baseline until this resolves.')
-        else:
-            # EXTERNAL_LATEST, not LATEST_ONLY: see common.py. The publisher
-            # is not ours, and a RELIABLE reader against a BEST_EFFORT writer
-            # does not connect and does not say so.
-            self.create_subscription(can_type, self.topic, self.on_can,
-                                     EXTERNAL_LATEST)
-            self.get_logger().info(
-                f'live_odom_node: subscribed to {self.topic} ({type_name}) '
-                f'as BEST_EFFORT, stale after {self.stale_timeout_s:.2f}s')
+
+        self.create_subscription(CANMsg, self.topic, self.on_can, EXTERNAL_LATEST)
+        self.get_logger().info(
+            f'live_odom_node: subscribed to {self.topic} (ads_messages/msg/CANMsg) '
+            f'as BEST_EFFORT, stale after {self.stale_timeout_s:.2f}s')
 
         # Report health once a second. A node that receives nothing and a node
         # whose every message is flagged look identical from outside, and
@@ -202,16 +172,8 @@ class LiveOdomNode(Node):
             self.flagged += 1
             return
 
-        try:
-            speed = float(msg.spd_mps)
-            yaw_rate = float(msg.imu.imu.angular_velocity.z)
-        except AttributeError as exc:
-            self.get_logger().warn(
-                f'live_odom_node: {self.topic} message is missing a field this '
-                f'node needs ({exc}). Expected spd_mps and '
-                f'imu.imu.angular_velocity.z, as recorded in the Oct 2026 bags.')
-            return
-
+        speed = float(msg.spd_mps)
+        yaw_rate = float(msg.imu.imu.angular_velocity.z)
         self._check_units(speed, yaw_rate)
 
         # Same arithmetic as extract_can.py:
@@ -244,16 +206,8 @@ class LiveOdomNode(Node):
 
     @staticmethod
     def _flagged(msg):
-        """
-        Report whether the vehicle is telling us not to trust this sample.
-
-        Read defensively: a field that is absent must not take the node down,
-        and absence is treated as "no complaint" rather than "bad".
-        """
-        if getattr(msg, 'error', False) or getattr(msg, 'spd_error', False):
-            return True
-        imu = getattr(msg, 'imu', None)
-        return imu is not None and not getattr(imu, 'valid', True)
+        """Report whether the vehicle is telling us not to trust this sample."""
+        return msg.error or msg.spd_error or not msg.imu.valid
 
     def _check_units(self, speed, yaw_rate):
         if self.warned_units:

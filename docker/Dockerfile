@@ -76,9 +76,11 @@ COPY bench /bench
 #    because an ament_python package is not checked for its imports. The
 #    failure would surface only at launch, as ModuleNotFoundError from a node
 #    that worked everywhere it was tested.
+
 # ---------------------------------------------------------------------------
 COPY src/perception_suite /src/perception_suite
 COPY src/perception_suite_msgs /src/perception_suite_msgs
+COPY src/ads_messages /src/ads_messages
 
 # ---------------------------------------------------------------------------
 # 3. The offroad_autonomy library (planning and perception), shimmed and installed.
@@ -137,38 +139,13 @@ RUN cp -r /src/offroad_autonomy /tmp/build \
 RUN mkdir -p /opt/ws/src \
  && cp -r /src/perception_suite /opt/ws/src/ \
  && cp -r /src/perception_suite_msgs /opt/ws/src/ \
+ && cp -r /src/ads_messages /opt/ws/src/ \
  && python3 /bench/scripts/bev_overlay.py --pkg /opt/ws/src/perception_suite \
  && python3 /bench/overlays/install_live_odom.py --pkg /opt/ws/src/perception_suite \
  && cd /opt/ws \
  && source /opt/ros/humble/setup.bash \
  && colcon build \
  && rm -rf /opt/ws/build /opt/ws/log
-
-# ---------------------------------------------------------------------------
-# 4b. ads_messages, in a SEPARATE overlay workspace.
-#
-#     This is our reconstruction of HATCI's message definitions, rebuilt from
-#     the schema text embedded in their own bag files. Without it `ros2 bag
-#     play` cannot deserialize /CAN or /vehicle_config and bag replay is
-#     limited to the image topic.
-#
-#     It is deliberately NOT in /opt/ws. ROS 2 Humble matches a publisher to a
-#     subscriber on the type NAME only, with no structural check, so if HATCI's
-#     real package were installed alongside ours the two would be
-#     indistinguishable and a version skew would decode their live topic into
-#     silent garbage. Keeping ours in its own overlay means the entrypoint
-#     chooses one explicitly rather than someone remembering to.
-#
-#     The entrypoint sources this for bag replay, and for live CAN only when
-#     HATCI's package is absent. See replay/ads_messages/README.md.
-# ---------------------------------------------------------------------------
-COPY replay/ads_messages /src/ads_messages
-RUN mkdir -p /opt/replay_ws/src \
- && cp -r /src/ads_messages /opt/replay_ws/src/ \
- && cd /opt/replay_ws \
- && source /opt/ros/humble/setup.bash \
- && colcon build \
- && rm -rf /opt/replay_ws/build /opt/replay_ws/log
 
 # ---------------------------------------------------------------------------
 # 5. Entrypoint. Sources ROS and the prebuilt workspace, then dispatches.

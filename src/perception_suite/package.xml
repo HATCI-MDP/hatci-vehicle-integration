@@ -19,6 +19,7 @@
   <depend>message_filters</depend>
   <depend>ament_index_python</depend>
   <depend>perception_suite_msgs</depend>
+  <depend>ads_messages</depend>
 
   <!-- offroad_autonomy is a required runtime dependency and is NOT declared as
        a <depend> here on purpose: it is not in rosdistro, so rosdep cannot

@@ -155,9 +155,7 @@ def module_constant(path, name):
 
 # Launch argument -> (module, constant) whose values must agree, because the
 # launch file duplicates the literal instead of importing the module.
-MIRRORED_DEFAULTS = {
-    'can_msg_type': ('live_odom_node', 'DEFAULT_CAN_TYPE'),
-}
+MIRRORED_DEFAULTS = {}
 
 
 def findings():

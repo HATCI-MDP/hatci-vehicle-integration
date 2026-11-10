@@ -187,9 +187,10 @@ def generate_launch_description():
         DeclareLaunchArgument('bag_topics',
                               default_value='/image_processing/image_compressed '
                                             '/image_processing/camera_info',
-                              description='Topics to replay. Only these two by\n'
-                                          'default, because replaying /CAN needs\n'
-                                          'the ads_messages package installed.'),
+                              description='Topics to replay. Images only by\n'
+                                          'default; append /CAN to replay the\n'
+                                          'vehicle data too (ads_messages/msg/CANMsg,\n'
+                                          'built from src/ads_messages).'),
         DeclareLaunchArgument('bag_loop', default_value='false',
                               description='Replay the bag end to end repeatedly'),
         DeclareLaunchArgument('bag_rate', default_value='1.0',
@@ -268,21 +269,8 @@ def generate_launch_description():
                                           'e.g. /CAN. Empty disables the node. '
                                           'Mutually exclusive with can_csv: the '
                                           'csv is the recorded bags, this is the '
-                                          'vehicle. Needs the CAN message package '
-                                          'built into the image so the type can be '
-                                          'resolved; see OPEN-ITEMS.md section 1'),
-        DeclareLaunchArgument('can_msg_type',
-                              default_value='ads_messages/msg/CANMsg',
-                              description='ROS type on can_topic. Recovered\n'
-                                          'from the Oct 2026 bags, which is\n'
-                                          'why it is a default and not a\n'
-                                          'certainty: if your live bus\n'
-                                          'publishes a different type, set it\n'
-                                          'here rather than editing the node.\n'
-                                          'Resolved at runtime, so a wrong\n'
-                                          'value leaves the grid without\n'
-                                          'odometry instead of failing the\n'
-                                          'whole pipeline'),
+                                          'vehicle. Type is ads_messages/msg/CANMsg, '
+                                          'published by HATCI\'s CAN node'),
         DeclareLaunchArgument('can_csv', default_value='',
                               description='Extracted CAN csv to replay as odometry. '
                                           'Empty disables the node, and the planner '
@@ -330,8 +318,7 @@ def generate_launch_description():
              condition=IfCondition(
                  PythonExpression(["'", LaunchConfiguration('can_csv'), "' != ''"]))),
         Node(package='perception_suite', executable='live_odom_node', output='screen',
-             parameters=[{'can_topic': LaunchConfiguration('can_topic'),
-                          'can_msg_type': LaunchConfiguration('can_msg_type')}],
+             parameters=[{'can_topic': LaunchConfiguration('can_topic')}],
              condition=IfCondition(
                  PythonExpression(["'", LaunchConfiguration('can_topic'), "' != ''"]))),
         stage('4_postprocess_node'),

@@ -10,8 +10,8 @@ configuration this project reports on - 26s segmentation plus the BEV grid -
 has only ever run against recorded odometry. This node is the live
 replacement.
 
-It subscribes to /CAN, which HATCI's CAN node publishes on the vehicle as
-ads_messages/msg/CANMsg.
+It subscribes to /CAN, ads_messages/msg/CANMsg, which can_interface's decoder
+publishes from the CAN FD bus.
 The two signals come straight off the message, exactly as extract_can.py takes
 them out of the bag:
 
@@ -76,20 +76,6 @@ grid only ever compares consecutive poses and decays anything older than
 memory_s. The offline integration was validated against the bags' own GPS at
 0.6-1.3% of path length over ~2 km, with median position error 0.3-0.6 m over
 the 1-2 s the grid actually remembers.
-
-Two things to confirm with HATCI
---------------------------------
-1. The error flags. This node skips any message with `error` or `spd_error`
-   set, or with `imu.valid` false, on the assumption that those mean what
-   their names say. If a flag is set permanently on a healthy vehicle this
-   node will go silent and the grid will never shift, so the _report() line
-   below says explicitly how many messages were dropped and why.
-   `imu.yaw_rate_status` is reported but never gated on, because the meaning
-   of its values is not documented in the bag's schema.
-2. Sign convention. REP-103 and sensor_msgs/Imu both say angular velocity is
-   right-handed about +z, so a LEFT turn is positive. The node assumes that.
-   If the vehicle reports the opposite, the grid will shift the wrong way on
-   every turn and it will look like a perception fault, not a sign error.
 """
 
 import math
@@ -207,7 +193,7 @@ class LiveOdomNode(Node):
     @staticmethod
     def _flagged(msg):
         """Report whether the vehicle is telling us not to trust this sample."""
-        return msg.error or msg.spd_error or not msg.imu.valid
+        return msg.spd_error or not msg.imu.valid
 
     def _check_units(self, speed, yaw_rate):
         if self.warned_units:
@@ -275,7 +261,7 @@ class LiveOdomNode(Node):
         elif used == 0:
             self.get_logger().warn(
                 f'live_odom_node: {received} msg/s on {self.topic} but none '
-                f'usable ({flagged} carried error/spd_error/imu.valid flags). '
+                f'usable ({flagged} carried spd_error or imu.valid=false). '
                 f'If those flags are set permanently on a healthy vehicle, '
                 f'relaunch with trust_flags:=false and tell us.')
         else:

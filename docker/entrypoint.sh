@@ -177,8 +177,7 @@ done
 set -- ${ARGS[@]+"${ARGS[@]}"}
 
 # ---------------------------------------------------------------------------
-# ads_messages: HATCI's message package, the types their CAN node publishes on
-# /CAN.
+# ads_messages: HATCI's message package,
 # ---------------------------------------------------------------------------
 ensure_ads_messages () {
   ros2 pkg prefix ads_messages >/dev/null 2>&1
@@ -207,9 +206,7 @@ case "$MODE" in
     # own V4L2 backend mis-decodes every format it offers; only NV16 pulled
     # through a GStreamer pipeline produces a correct frame.
     #
-    # NRU-230V: with CAMERA_PORT set (dev.sh sets it), the /dev/videoN is
-    # looked up from /dev/nru-portN at launch, because the N in videoN can
-    # change when the driver is reloaded. CAMERA_MODEL sets the capture size.
+    # NRU-230V: with CAMERA_PORT set (dev.sh sets it)
     if [ -z "${CAMERA_INDEX:-}" ] && [ -n "${CAMERA_PORT:-}" ] && [ -e "/dev/nru-port$CAMERA_PORT" ]; then
       RDEV="$(stat -c '%t:%T' "/dev/nru-port$CAMERA_PORT")"
       for v in /dev/video[0-9]*; do

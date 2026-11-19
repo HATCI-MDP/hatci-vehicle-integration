@@ -5,48 +5,45 @@
 
 beamng:
   camera:
-    # VIDEO: camera height and pitch are guesses. Only the planner's
-    # image-to-ground mapping reads them.
-    height_m: 1.5
+    # Measured by HATCI on the vehicle: lens 1.407 m above the ground, roll,
+    # pitch and yaw almost zero. Only the image-to-ground mapping reads these.
+    height_m: 1.407
     pitch_deg: 0.0
-    # VIDEO: the frame as video_node publishes it (1280 wide, 16:9).
-    # fov_h is a guess until the camera is known; the planner's metres and
-    # its ROI both depend on it.
     sensor:
-      # The HATCI vehicle camera, from the bag recordings.
+      # The HATCI vehicle camera (IMX490).
       width: 2880
       height: 1860
-      # Fisheye, rational_polynomial. CameraModel is a pinhole, so the
-      # ground projection is approximate until the image is undistorted.
-      # From the bag's own CameraInfo: fx = 1714.2 over 2880 px. The lens is a
-      # 120 degree fisheye, but these frames are already rectified (all
-      # distortion coefficients zero), and rectification crops the field of
-      # view, so the lens spec is not what the frames show.
-      fov_h: 80.1
+      # The frames are raw, not rectified: undistorting clip1 with HATCI's
+      # calibration (the undistortion section below) straightens the hood
+      # and kerb lines. The old 80.1 came from the bags' CameraInfo
+      # (fx 1714.2, zero distortion), which does not describe these frames.
+      #
+      # With undistortion on, this is the field of view of the undistorted
+      # frame: the preprocess node builds it on exactly this pinhole model,
+      # so the planner's metres stay consistent. 95.4 is the widest that
+      # leaves no black border (95.41); wider and the node warns.
+      fov_h: 95.4
     # The car's hood across the bottom of demo_route.mp4, traced from the
     # edges that stay put across the whole video. Normalised (x, y).
     ego_mask:
       enabled: true
       margin_px: 2
-      # Flat at 0.67, matching origin/main. The hood's silhouette sits at
-      # 0.63 at the edges and 0.67 at the centre, so 0.63 was the line that
-      # cleared all of it - but it also threw away rows 261-276, which carry
-      # the nearest road the camera can see.
+      # Undistorted frames (undistortion section below). The hood's top edge
+      # is flat at about 0.662 in the centre and falls to about 0.735 at the
+      # sides, traced on clip1 frames 150 and 900. Flat at 0.655 (plus
+      # margin_px) clears all of it, and the ROI keeps the same 47 rows it had
+      # before, so min_road_pixels still fits. The nearest visible ground is
+      # about 6.6 m ahead at 1.407 m. Re-check on the car's live view if the
+      # camera has been remounted since the October bags.
       #
-      # Measured over 1800 frames of bag1 and bag3 with the 26n, 0.63 -> 0.67:
-      # gate stops 75 -> 46 on bag1 and 89 -> 63 on bag3, and the frame-300
-      # failure cluster disappears. Those rows anchor the centreline walk; it
-      # was dying three rows later to the lateral-slope guard without them.
-      #
-      # And the recovered band is road, not bodywork: per column it is called
-      # road 0.848 of the time in the centre against 0.156/0.161 at the edges,
-      # an outer/centre ratio of 0.19 - identical to the rows above it that
-      # are known-good road. Bonnet being read as terrain would light up the
-      # edges, since that is where the hood reaches highest. See
-      # scripts/hood_band.py.
+      # Before undistortion this was flat at 0.67: on the raw frames the
+      # silhouette sat at 0.63 at the edges and 0.67 at the centre (see git
+      # history and scripts/hood_band.py for that measurement). To run
+      # without undistortion, use tmp_26s_demo_raw.yaml, which changes the
+      # hood cut, fov_h and roi_height together.
       polygon:
-        - [0.0, 0.67]
-        - [1.0, 0.67]
+        - [0.0, 0.655]
+        - [1.0, 0.655]
         - [1.0, 1.0]
         - [0.0, 1.0]
 perception:
@@ -124,9 +121,10 @@ planning:
     # paths still at 0%. "path end" fell from 73% of frames to 1.2%.
     ahead_m: 24.0
     lookahead_m: 20.0
-  # VIDEO: with pitch 0 the horizon is mid-frame, so 0.45 stops just below it
-  # (about 27 m ahead at the guessed height and FOV).
-  roi_height: 0.45
+  # With pitch 0 the horizon is mid-frame. The ROI top sits 3.0 degrees below
+  # it (0.45 gave 3.1 at the old 80.1 FOV): 26.8 m ahead at 1.407 m. Left at
+  # 0.45, the wider FOV would cut it to 19.8 m.
+  roi_height: 0.463
   baseline_temporal_blend: 0.4
   baseline_max_shift_m: 0.5
   gate:
@@ -193,3 +191,17 @@ mpc:
   # passes this to ArcPlanner as rear_axle_behind_camera_m, so it sets where
   # every arc begins relative to the camera.
   camera_ahead_of_rear_axle_m: 1.07
+
+# Lens undistortion, applied by 2_preprocess_node after the resize to the
+# working size. HATCI's calibration of the vehicle IMX490 (Brown-Conrady),
+# at the native 2880x1860. The output is a pinhole image with fov_h above,
+# centred, square pixels: the camera model every stage projects with.
+# Read only by perception_suite; offroad_autonomy's loader ignores it.
+# Set enabled: false for footage from any other camera.
+undistortion:
+  enabled: true
+  native_size: [2880, 1860]
+  # fx, fy, cx, cy in native pixels
+  camera_matrix: [1514.45894838158, 1522.09931279667, 1419.01898306367, 912.475154507531]
+  # k1, k2, p1, p2 (k3 = 0)
+  dist_coeffs: [-0.342147628921505, 0.0994968602340448, 0.00449211504689297, 0.000303143869552083]
